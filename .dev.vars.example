@@ -1,0 +1,4 @@
+# ローカル開発用シークレット（コミット禁止。実値は macOS Keychain から注入）
+# コピー: cp .dev.vars.example .dev.vars && <値を書き換え>
+GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxx
+ADMIN_KEY=changeme-generate-a-long-random-string

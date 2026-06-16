@@ -1,0 +1,19 @@
+name = "meo-harness"
+main = "worker/index.mjs"
+compatibility_date = "2024-11-01"
+workers_dev = true
+preview_urls = false
+
+# ── KV: 店舗設定 ──────────────────────────────────────────────────────────────
+# ローカル dev では wrangler が自動でエミュレート。
+# デプロイ前に `wrangler kv namespace create STORES` で id を取得して置き換える。
+[[kv_namespaces]]
+binding = "STORES"
+id = "8bcb74e16c5d4f46a440b20856e44de9"
+
+# ── Secrets（値は .dev.vars / Workers Secrets で供給） ────────────────────────
+# GROQ_API_KEY  : AI返信エンジン（Groq、無料枠）
+# ADMIN_KEY     : /admin/* 管理エンドポイントの認証キー
+
+[vars]
+VERSION = "0.1.0"
