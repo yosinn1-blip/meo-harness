@@ -202,9 +202,8 @@ async function pollGmailReviews(env) {
     const parsed = parseGbpReviewEmail(email);
     if (!parsed) continue;
 
-    const match = parsed.businessName
-      ? stores.find((s) => s.store.businessName === parsed.businessName)
-      : stores[0];
+    const match =
+      stores.find((s) => s.store.businessName === parsed.businessName) ?? stores[0];
     if (!match) continue;
 
     const review = {
