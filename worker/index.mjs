@@ -1,10 +1,10 @@
-// MEO Harness — 中央窓口 Cloudflare Worker (step3 / d)
+// MEO Harness — 中央窓口 Cloudflare Worker
 //
 // エンドポイント:
 //   GET  /health                  — ヘルスチェック
-//   POST /review                  — 口コミ→AI下書き→LINE通知（X-API-Key: store.apiKey）
-//   POST /signup                  — 設置ウィザード用・公開エンドポイント。LINE認証情報を検証のうえ
-//                                    storeId/apiKeyをサーバー側で生成してKVに登録（ADMIN_KEY不要）
+//   POST /review                  — 口コミ→AI下書き→通知（X-API-Key: store.apiKey）
+//   POST /webhook/:platform       — 外部プラットフォーム Webhook（Yelp/Trustpilot）
+//   POST /signup                  — 設置ウィザード用・公開エンドポイント
 //   PUT  /admin/stores/:storeId   — 店舗設定を KV に登録（X-Admin-Key: ADMIN_KEY）
 //   DELETE /admin/stores/:storeId — 店舗設定を KV から削除（X-Admin-Key: ADMIN_KEY）
 //
@@ -13,26 +13,25 @@
 //   val: {
 //     apiKey, businessName, businessType,
 //     notificationChannel: 'line' | 'telegram'  (省略時 → 'line')
+//     notifyMode: 'immediate' | 'daily-digest'  (省略時 → 'immediate')
+//     timezone: string  (例: 'Asia/Tokyo'。将来のタイムゾーン対応用・現在は未使用)
+//     webhookSecret: string  (Webhook HMAC 署名検証用シークレット)
 //     -- LINE --
 //     lineChannelToken, lineUserId,
 //     -- Telegram --
 //     telegramBotToken, telegramChatId,
-//     -- オプション --
-//     timezone: string  (例: 'Asia/Tokyo', 'America/New_York'。ダイジスト送信タイミング用・将来使用)
 //   }
+//   key: "pending:{storeId}"  — daily-digest モードの未送信レビューバッファ
+//   val: Array<{ star, text, name?, draft?, ... }>
 //
 // Secrets（.dev.vars / Workers Secrets）:
-//   GROQ_API_KEY — Groq API キー（Yoshiki 所有、無料枠。MVP は1本で吸収）
+//   GROQ_API_KEY — Groq API キー（無料枠）
 //   ADMIN_KEY    — 管理エンドポイント認証
-//
-// セキュリティ方針:
-//   /signup は不特定多数のブラウザから呼ばれる公開エンドポイントのため ADMIN_KEY は
-//   一切要求しない（公開ページのJSに秘密鍵を置くと丸見えになるため）。代わりに
-//   storeId/apiKeyをWorker側で生成し、登録前にLINE Profile APIで認証情報の有効性を検証する。
 
 import { generateReply, PROVIDERS } from '../src/reply-engine.mjs';
 import { verifyLineCredentials } from '../src/line-notify.mjs';
 import { sendDigest } from '../src/notify.mjs';
+import { mergePendingReviews, shouldSendDigest } from '../src/cron.mjs';
 
 export default {
   async fetch(request, env) {
@@ -47,6 +46,11 @@ export default {
 
       if (method === 'POST' && path === '/review') {
         return await handleReview(request, env);
+      }
+
+      if (path.startsWith('/webhook/')) {
+        const platform = path.slice('/webhook/'.length);
+        if (method === 'POST') return await handleWebhook(request, env, platform);
       }
 
       if (path === '/signup') {
@@ -66,7 +70,100 @@ export default {
       return jsonError(`Internal Error: ${err.message}`, 500);
     }
   },
+
+  async scheduled(controller, env, ctx) {
+    const list = await env.STORES.list({ prefix: 'pending:' });
+    if (!list.keys.length) return;
+
+    const results = await Promise.allSettled(
+      list.keys.map(({ name: key }) => handlePendingStore(key, env))
+    );
+
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        console.error(`[cron] failed for ${list.keys[i].name}:`, r.reason?.message);
+      }
+    });
+  },
 };
+
+// ── 共通パイプライン ──────────────────────────────────────────────────────────
+// AI下書き生成 → daily-digest ならバッファ蓄積、immediate なら即時通知
+
+async function processReviews(reviews, store, storeId, env) {
+  const { businessName, businessType } = store;
+
+  const settled = await Promise.allSettled(
+    reviews.map(review =>
+      generateReply({
+        review,
+        business: { type: businessType ?? '店舗', name: businessName ?? storeId },
+        provider: PROVIDERS.GROQ,
+        providerConfig: { apiKey: env.GROQ_API_KEY },
+      }).then(r => ({ ...review, draft: r.text, warnings: r.warnings, tokens: r.tokens }))
+    )
+  );
+
+  const processed = settled.map((r, i) =>
+    r.status === 'fulfilled'
+      ? r.value
+      : { ...reviews[i], draft: null, draftError: r.reason?.message }
+  );
+  const failed = processed.filter(r => r.draft == null).length;
+
+  if (shouldSendDigest(store)) {
+    const existingRaw = await env.STORES.get(`pending:${storeId}`);
+    const existing = existingRaw ? JSON.parse(existingRaw) : [];
+    const merged = mergePendingReviews(existing, processed);
+    await env.STORES.put(`pending:${storeId}`, JSON.stringify(merged));
+    return { buffered: true, count: merged.length };
+  }
+
+  const notifyResult = await sendDigest({ store, reviews: processed });
+  return { buffered: false, processed: processed.length, failed, notify: notifyResult };
+}
+
+// ── Cron: pending バッファの処理 ──────────────────────────────────────────────
+
+async function handlePendingStore(pendingKey, env) {
+  const storeId = pendingKey.slice('pending:'.length);
+
+  const [storeRaw, pendingRaw] = await Promise.all([
+    env.STORES.get(`store:${storeId}`),
+    env.STORES.get(pendingKey),
+  ]);
+
+  if (!storeRaw) {
+    await env.STORES.delete(pendingKey);
+    return;
+  }
+
+  const store = JSON.parse(storeRaw);
+  const reviews = pendingRaw ? JSON.parse(pendingRaw) : [];
+  if (!reviews.length) {
+    await env.STORES.delete(pendingKey);
+    return;
+  }
+
+  const settled = await Promise.allSettled(
+    reviews.map(review =>
+      generateReply({
+        review,
+        business: { type: store.businessType ?? '店舗', name: store.businessName ?? storeId },
+        provider: PROVIDERS.GROQ,
+        providerConfig: { apiKey: env.GROQ_API_KEY },
+      }).then(r => ({ ...review, draft: r.text, warnings: r.warnings }))
+    )
+  );
+
+  const processed = settled.map((r, i) =>
+    r.status === 'fulfilled' ? r.value : { ...reviews[i], draft: null }
+  );
+
+  // 通知成功時のみバッファ削除。失敗時は次回 Cron で再試行。
+  await sendDigest({ store, reviews: processed });
+  await env.STORES.delete(pendingKey);
+}
 
 // ── /review ──────────────────────────────────────────────────────────────────
 
@@ -87,43 +184,60 @@ async function handleReview(request, env) {
   const clientKey = request.headers.get('X-API-Key') ?? '';
   if (clientKey !== store.apiKey) return jsonError('Unauthorized', 401);
 
-  const { lineChannelToken, lineUserId, businessName, businessType } = store;
-
-  // AI 下書き生成（並列・best-effort）
-  const settled = await Promise.allSettled(
-    reviews.map(review =>
-      generateReply({
-        review,
-        business: { type: businessType ?? '店舗', name: businessName ?? storeId },
-        provider: PROVIDERS.GROQ,
-        providerConfig: { apiKey: env.GROQ_API_KEY },
-      }).then(r => ({ ...review, draft: r.text, warnings: r.warnings, tokens: r.tokens }))
-    )
-  );
-
-  const processed = settled.map((r, i) =>
-    r.status === 'fulfilled'
-      ? r.value
-      : { ...reviews[i], draft: null, draftError: r.reason?.message }
-  );
-  const failed = processed.filter(r => r.draft == null).length;
-
-  // 通知送信（notificationChannel に応じてチャネルを選択）
-  let notifyResult;
+  let result;
   try {
-    notifyResult = await sendDigest({ store, reviews: processed });
+    result = await processReviews(reviews, store, storeId, env);
   } catch (err) {
-    return json({
-      ok: false,
-      processed: processed.length,
-      failed,
-      source: reviewSource ?? 'unknown',
-      notifyError: err.message,
-      reviews: processed,
-    });
+    return json({ ok: false, error: err.message, source: reviewSource ?? 'unknown' }, 500);
   }
 
-  return json({ ok: true, processed: processed.length, failed, source: reviewSource ?? 'unknown', notify: notifyResult });
+  if (result.buffered) {
+    return json({ ok: true, buffered: result.count, source: reviewSource ?? 'unknown' });
+  }
+  return json({ ok: true, ...result, source: reviewSource ?? 'unknown' });
+}
+
+// ── /webhook/:platform ────────────────────────────────────────────────────────
+
+async function handleWebhook(request, env, platform) {
+  const storeId = request.headers.get('X-Store-Id') ?? '';
+  if (!storeId) return jsonError('X-Store-Id header is required', 400);
+
+  const storeRaw = await env.STORES.get(`store:${storeId}`);
+  if (!storeRaw) return jsonError(`Unknown store: ${storeId}`, 404);
+  const store = JSON.parse(storeRaw);
+
+  if (!store.webhookSecret) return jsonError('Webhook not configured for this store', 403);
+
+  const rawBody = await request.text();
+  const signature = request.headers.get('X-Webhook-Secret') ?? '';
+
+  const { verifyHmac } = await import('../src/hmac.mjs');
+  const valid = await verifyHmac(store.webhookSecret, rawBody, signature);
+  if (!valid) return jsonError('Invalid webhook signature', 401);
+
+  let rawReview;
+  try { rawReview = JSON.parse(rawBody); } catch { return jsonError('Invalid JSON body', 400); }
+
+  const { normalize } = await import('../src/review-parser.mjs');
+  let review;
+  try {
+    review = normalize(platform, rawReview);
+  } catch (err) {
+    return jsonError(err.message, 400);
+  }
+
+  let result;
+  try {
+    result = await processReviews([review], store, storeId, env);
+  } catch (err) {
+    return json({ ok: false, error: err.message, platform }, 500);
+  }
+
+  if (result.buffered) {
+    return json({ ok: true, buffered: result.count, platform });
+  }
+  return json({ ok: true, ...result, platform });
 }
 
 // ── /signup（設置ウィザード） ────────────────────────────────────────────────
@@ -174,7 +288,7 @@ async function handleAdminPut(request, env, storeId) {
     lineChannelToken, lineUserId,
     telegramBotToken, telegramChatId,
     businessName, businessType, apiKey,
-    notificationChannel, timezone,
+    notificationChannel, timezone, notifyMode, webhookSecret,
   } = body ?? {};
 
   if (!apiKey) return jsonError('apiKey is required', 400);
@@ -189,6 +303,8 @@ async function handleAdminPut(request, env, storeId) {
   const store = {
     apiKey, businessName, businessType, notificationChannel: channel,
     ...(timezone ? { timezone } : {}),
+    ...(notifyMode ? { notifyMode } : {}),
+    ...(webhookSecret ? { webhookSecret } : {}),
     ...(lineChannelToken ? { lineChannelToken } : {}),
     ...(lineUserId ? { lineUserId } : {}),
     ...(telegramBotToken ? { telegramBotToken } : {}),
@@ -217,8 +333,6 @@ function jsonError(message, status) {
   return json({ error: message }, status);
 }
 
-// /signup はブラウザの設置ウィザード（別オリジン）から呼ばれるためCORSが必要。
-// クッキー等の認証情報を伴わない公開POSTなので Allow-Origin: * で問題ない。
 function withCors(response) {
   response.headers.set('Access-Control-Allow-Origin', '*');
   return response;

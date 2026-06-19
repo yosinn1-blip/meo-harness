@@ -17,3 +17,7 @@ id = "8bcb74e16c5d4f46a440b20856e44de9"
 
 [vars]
 VERSION = "0.1.0"
+
+# ── Cron Trigger: 日次ダイジェスト（00:00 UTC = 09:00 JST）───────────────────
+[triggers]
+crons = ["0 0 * * *"]
