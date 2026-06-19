@@ -10,7 +10,16 @@
 //
 // KV スキーマ:
 //   key: "store:{storeId}"
-//   val: { lineChannelToken, lineUserId, businessName, businessType, apiKey }
+//   val: {
+//     apiKey, businessName, businessType,
+//     notificationChannel: 'line' | 'telegram'  (省略時 → 'line')
+//     -- LINE --
+//     lineChannelToken, lineUserId,
+//     -- Telegram --
+//     telegramBotToken, telegramChatId,
+//     -- オプション --
+//     timezone: string  (例: 'Asia/Tokyo', 'America/New_York'。ダイジスト送信タイミング用・将来使用)
+//   }
 //
 // Secrets（.dev.vars / Workers Secrets）:
 //   GROQ_API_KEY — Groq API キー（Yoshiki 所有、無料枠。MVP は1本で吸収）
@@ -22,7 +31,8 @@
 //   storeId/apiKeyをWorker側で生成し、登録前にLINE Profile APIで認証情報の有効性を検証する。
 
 import { generateReply, PROVIDERS } from '../src/reply-engine.mjs';
-import { sendLineDigest, verifyLineCredentials } from '../src/line-notify.mjs';
+import { verifyLineCredentials } from '../src/line-notify.mjs';
+import { sendDigest } from '../src/notify.mjs';
 
 export default {
   async fetch(request, env) {
@@ -64,7 +74,7 @@ async function handleReview(request, env) {
   let body;
   try { body = await request.json(); } catch { return jsonError('Invalid JSON body', 400); }
 
-  const { storeId, reviews } = body ?? {};
+  const { storeId, reviews, reviewSource } = body ?? {};
   if (!storeId) return jsonError('storeId is required', 400);
   if (!Array.isArray(reviews) || reviews.length === 0) {
     return jsonError('reviews must be a non-empty array', 400);
@@ -98,26 +108,22 @@ async function handleReview(request, env) {
   );
   const failed = processed.filter(r => r.draft == null).length;
 
-  // LINE 通知
-  let lineResult;
+  // 通知送信（notificationChannel に応じてチャネルを選択）
+  let notifyResult;
   try {
-    lineResult = await sendLineDigest({
-      channelAccessToken: lineChannelToken,
-      to: lineUserId,
-      reviews: processed,
-      digest: { bizName: businessName },
-    });
+    notifyResult = await sendDigest({ store, reviews: processed });
   } catch (err) {
     return json({
       ok: false,
       processed: processed.length,
       failed,
-      lineError: err.message,
+      source: reviewSource ?? 'unknown',
+      notifyError: err.message,
       reviews: processed,
     });
   }
 
-  return json({ ok: true, processed: processed.length, failed, line: lineResult });
+  return json({ ok: true, processed: processed.length, failed, source: reviewSource ?? 'unknown', notify: notifyResult });
 }
 
 // ── /signup（設置ウィザード） ────────────────────────────────────────────────
@@ -126,7 +132,7 @@ async function handleSignup(request, env) {
   let body;
   try { body = await request.json(); } catch { return withCors(jsonError('Invalid JSON body', 400)); }
 
-  const { lineChannelToken, lineUserId, businessName, businessType } = body ?? {};
+  const { lineChannelToken, lineUserId, businessName, businessType, timezone } = body ?? {};
   if (!lineChannelToken || !lineUserId) {
     return withCors(jsonError('lineChannelToken, lineUserId are required', 400));
   }
@@ -141,7 +147,11 @@ async function handleSignup(request, env) {
 
   const storeId = crypto.randomUUID();
   const apiKey = crypto.randomUUID();
-  const store = { lineChannelToken, lineUserId, businessName, businessType, apiKey };
+  const store = {
+    lineChannelToken, lineUserId, businessName, businessType, apiKey,
+    notificationChannel: 'line',
+    ...(timezone ? { timezone } : {}),
+  };
   await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
 
   return withCors(json({ ok: true, storeId, apiKey }));
@@ -160,12 +170,30 @@ async function handleAdminPut(request, env, storeId) {
   let body;
   try { body = await request.json(); } catch { return jsonError('Invalid JSON body', 400); }
 
-  const { lineChannelToken, lineUserId, businessName, businessType, apiKey } = body ?? {};
-  if (!lineChannelToken || !lineUserId || !apiKey) {
-    return jsonError('lineChannelToken, lineUserId, apiKey are required', 400);
+  const {
+    lineChannelToken, lineUserId,
+    telegramBotToken, telegramChatId,
+    businessName, businessType, apiKey,
+    notificationChannel, timezone,
+  } = body ?? {};
+
+  if (!apiKey) return jsonError('apiKey is required', 400);
+  const channel = notificationChannel ?? 'line';
+  if (channel === 'line' && (!lineChannelToken || !lineUserId)) {
+    return jsonError('lineChannelToken and lineUserId are required for line channel', 400);
+  }
+  if (channel === 'telegram' && (!telegramBotToken || !telegramChatId)) {
+    return jsonError('telegramBotToken and telegramChatId are required for telegram channel', 400);
   }
 
-  const store = { lineChannelToken, lineUserId, businessName, businessType, apiKey };
+  const store = {
+    apiKey, businessName, businessType, notificationChannel: channel,
+    ...(timezone ? { timezone } : {}),
+    ...(lineChannelToken ? { lineChannelToken } : {}),
+    ...(lineUserId ? { lineUserId } : {}),
+    ...(telegramBotToken ? { telegramBotToken } : {}),
+    ...(telegramChatId ? { telegramChatId } : {}),
+  };
   await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
   return json({ ok: true, storeId });
 }

@@ -9,6 +9,7 @@ import {
   buildSystemPrompt,
   sanitizeReply,
   generateReply,
+  detectLang,
 } from "../src/reply-engine.mjs";
 
 test("isHealthBiz: 医療・治療系を判定", () => {
@@ -107,4 +108,99 @@ test("generateReply: 未知のプロバイダは例外", async () => {
     }),
     /未知のプロバイダ/,
   );
+});
+
+// ── detectLang ────────────────────────────────────────────────────────────────
+
+test("detectLang: ひらがなを含む → ja", () => {
+  assert.equal(detectLang("とても良かったです！"), "ja");
+});
+
+test("detectLang: カタカナを含む → ja", () => {
+  assert.equal(detectLang("サービスが最高でした"), "ja");
+});
+
+test("detectLang: ハングルのみ → ko", () => {
+  assert.equal(detectLang("정말 좋았어요"), "ko");
+});
+
+test("detectLang: ASCII英語 → en", () => {
+  assert.equal(detectLang("Great service and friendly staff!"), "en");
+});
+
+test("detectLang: 空文字 → en", () => {
+  assert.equal(detectLang(""), "en");
+});
+
+test("detectLang: null → en", () => {
+  assert.equal(detectLang(null), "en");
+});
+
+// ── buildSystemPrompt（多言語） ────────────────────────────────────────────────
+
+test("buildSystemPrompt: lang=en は英語プロンプトを返す", () => {
+  const prompt = buildSystemPrompt({ bizType: "Hair salon", bizName: "Sofia", lang: "en" });
+  assert.doesNotMatch(prompt, /あなたは/, "should not contain Japanese");
+  assert.match(prompt, /respond.*language|same language|English/i);
+});
+
+test("buildSystemPrompt: lang=en・医療系は英語の免責文言を含む", () => {
+  const prompt = buildSystemPrompt({ bizType: "dental clinic", bizName: "Smith Dental", lang: "en" });
+  assert.doesNotMatch(prompt, /薬機法/);
+  assert.match(prompt, /guarantee|treatment|medical|outcome/i);
+});
+
+test("buildSystemPrompt: lang=ko は韓国語プロンプトを返す", () => {
+  const prompt = buildSystemPrompt({ bizType: "헤어살롱", bizName: "소피아", lang: "ko" });
+  assert.doesNotMatch(prompt, /あなたは/, "should not contain Japanese");
+  assert.match(prompt, /respond.*language|same language/i);
+});
+
+test("buildSystemPrompt: lang 未指定は日本語プロンプトのまま", () => {
+  const prompt = buildSystemPrompt({ bizType: "ヘアサロン", bizName: "ソフィア" });
+  assert.match(prompt, /あなたは/);
+});
+
+// ── generateReply（言語自動検出） ─────────────────────────────────────────────
+
+test("generateReply: 英語レビューはシステムプロンプトに日本語が含まれない", async () => {
+  let capturedSystem = "";
+  const mockFetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    capturedSystem = body.messages.find((m) => m.role === "system")?.content ?? "";
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "Thank you for your wonderful review!" } }],
+        usage: { total_tokens: 20 },
+      }),
+    };
+  };
+  await generateReply({
+    review: { star: 5, text: "Excellent service and friendly staff!" },
+    business: { type: "Hair salon", name: "Sofia" },
+    fetchImpl: mockFetch,
+  });
+  assert.doesNotMatch(capturedSystem, /あなたは/, "system prompt should not be Japanese for EN review");
+});
+
+test("generateReply: 日本語レビューはシステムプロンプトが日本語", async () => {
+  let capturedSystem = "";
+  const mockFetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    capturedSystem = body.messages.find((m) => m.role === "system")?.content ?? "";
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "ありがとうございました。" } }],
+        usage: { total_tokens: 20 },
+      }),
+    };
+  };
+  await generateReply({
+    review: { star: 5, text: "とても良かったです。また来ます！" },
+    business: { type: "ヘアサロン", name: "ソフィア" },
+    fetchImpl: mockFetch,
+  });
+  assert.match(capturedSystem, /あなたは/);
 });

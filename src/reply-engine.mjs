@@ -9,6 +9,19 @@
 //
 // プロンプトは abtest.mjs / gen-demo-drafts.mjs で検証済みのものを集約（重複解消）。
 
+/**
+ * レビュー本文から言語を推定する（ヒューリスティック）。
+ * ひらがな/カタカナがあれば ja、ハングルがあれば ko、それ以外は en。
+ * @param {string|null} text
+ * @returns {'ja'|'ko'|'en'}
+ */
+export function detectLang(text) {
+  if (!text) return 'en';
+  if (/[぀-ゟ゠-ヿ]/.test(text)) return 'ja';
+  if (/[가-힣]/.test(text)) return 'ko';
+  return 'en';
+}
+
 export const PROVIDERS = Object.freeze({
   GROQ: "groq",
   GEMINI: "gemini",
@@ -22,14 +35,30 @@ export const DEFAULT_MODELS = Object.freeze({
 });
 
 // 医療・治療系は薬機法/景表法に配慮し、効果保証の断定表現を禁じる一文を追加する。
-const HEALTH_BIZ_RE = /整体|接骨|整骨|鍼灸|治療院|クリニック|歯科|医院|カイロ|エステ|サロン.*(脱毛|痩身)/;
+// サブカテゴリで追加制約を変える（医療機関 / 治療院 / 美容医療系）。
+const HEALTH_BIZ_RE   = /整体|接骨|整骨|鍼灸|治療院|クリニック|歯科|医院|診療所|病院|カイロ|エステ|脱毛|痩身|clinic|dental|hospital|chiropractic|acupuncture|physiotherapy|aesthetics|esthetics|laser hair|slimming/i;
+const MEDICAL_RE      = /クリニック|歯科|医院|診療所|病院|clinic|dental|hospital/i;
+const THERAPY_RE      = /整体|接骨|整骨|鍼灸|治療院|カイロ|chiropractic|acupuncture|physiotherapy|osteopath/i;
+const BEAUTY_MED_RE   = /エステ|脱毛|痩身|aesthetics|esthetics|laser hair|slimming/i;
 
 export function isHealthBiz(bizType = "") {
   return HEALTH_BIZ_RE.test(bizType);
 }
 
-export function buildSystemPrompt({ bizType, bizName, health }) {
+/** "medical" | "therapy" | "beauty-medical" | null */
+export function getHealthCategory(bizType = "") {
+  if (MEDICAL_RE.test(bizType))    return "medical";
+  if (THERAPY_RE.test(bizType))    return "therapy";
+  if (BEAUTY_MED_RE.test(bizType)) return "beauty-medical";
+  return null;
+}
+
+export function buildSystemPrompt({ bizType, bizName, health, lang }) {
+  if (lang && lang !== "ja") {
+    return _buildEnglishSystemPrompt({ bizType, bizName, health });
+  }
   const isHealth = health ?? isHealthBiz(bizType);
+  const category = getHealthCategory(bizType ?? "");
   const lines = [
     `あなたは${bizType}「${bizName}」のオーナーです。`,
     "Googleビジネスプロフィールに届いたお客様の口コミに対する返信を書いてください。",
@@ -46,7 +75,51 @@ export function buildSystemPrompt({ bizType, bizName, health }) {
     "- やっていないキャンペーン等の事実を捏造しない",
   ];
   if (isHealth) {
-    lines.push("- 効果・治療・結果を保証する断定的な表現は避ける");
+    lines.push("- 効果・治療・結果を保証する断定的な表現は避ける（薬機法・景表法配慮）");
+  }
+  if (category === "medical") {
+    lines.push("- 「必ず治ります」「完治します」など診断・治療結果を約束する表現は使わない");
+    lines.push("- 医療的な判断を下さず、担当スタッフへの感謝や次回来院への温かい言葉に留める");
+  } else if (category === "therapy") {
+    lines.push("- 「病気が治る」「完全に回復する」など医療的な効果を断言する表現は使わない");
+    lines.push("- 施術の感想・体験への共感はOK。医療的な治癒の約束はしない");
+  } else if (category === "beauty-medical") {
+    lines.push("- 「必ず痩せる」「完全に脱毛できる」など効果を断定する表現は使わない");
+    lines.push("- 効果には個人差がある旨を前提とした表現にする");
+  }
+  return lines.join("\n");
+}
+
+function _buildEnglishSystemPrompt({ bizType, bizName, health }) {
+  const isHealth = health ?? isHealthBiz(bizType);
+  const category = getHealthCategory(bizType ?? "");
+  const lines = [
+    `You are the owner of ${bizType} "${bizName}".`,
+    "Please write a response to the following customer review posted on Google Business Profile.",
+    "",
+    "[OUTPUT FORMAT — STRICT]",
+    "- Output the reply text only. Do not add preambles like \"Reply:\", \"Draft:\", \"Here is a response:\", etc.",
+    "- Do not include parenthetical notes or annotations.",
+    "- Do not use name placeholders like \"[Customer Name]\". Only use the reviewer's name if explicitly provided; otherwise write without it.",
+    "",
+    "[CONTENT RULES]",
+    "- Respond in the same language as the reviewer's review.",
+    "- 2–4 sentences, concise. Always reference specific details from the review.",
+    "- For positive reviews: express genuine gratitude. For negative reviews: offer a sincere apology and commitment to improvement. Never argue or make excuses.",
+    "- Do not fabricate promotions or events that did not take place.",
+  ];
+  if (isHealth) {
+    lines.push("- Avoid assertive expressions that guarantee effects, treatment outcomes, or results (regulatory compliance).");
+  }
+  if (category === "medical") {
+    lines.push("- Do not promise specific diagnosis or treatment outcomes (e.g., \"you will definitely be cured\").");
+    lines.push("- Keep responses warm and focused on thanking the patient; leave medical judgments to the professionals.");
+  } else if (category === "therapy") {
+    lines.push("- Do not claim that conditions will be fully cured or medically resolved.");
+    lines.push("- Empathize with the patient's experience without promising medical recovery.");
+  } else if (category === "beauty-medical") {
+    lines.push("- Do not assert guaranteed results (e.g., \"you will definitely lose weight\").");
+    lines.push("- Acknowledge that individual results may vary.");
   }
   return lines.join("\n");
 }
@@ -194,10 +267,12 @@ export async function generateReply({
   if (!adapter) throw new Error(`未知のプロバイダ: ${provider}`);
 
   const model = providerConfig.model ?? DEFAULT_MODELS[provider];
+  const lang = detectLang(review.text);
   const system = buildSystemPrompt({
     bizType: business.type,
     bizName: business.name,
     health: business.health,
+    lang,
   });
   const user = buildUserPrompt(review);
   const _fetch = fetchImpl ?? globalThis.fetch;
