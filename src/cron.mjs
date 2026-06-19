@@ -16,3 +16,15 @@ export function mergePendingReviews(existing, incoming) {
 export function shouldSendDigest(store) {
   return store?.notifyMode === 'daily-digest';
 }
+
+/**
+ * 現在の UTC 時が店舗の「ダイジェスト送信時刻（現地 9:00）」かどうか返す。
+ * @param {{ utcOffset?: number }|null} store  — utcOffset: -12〜+14 の整数（省略時 +9=JST）
+ * @param {number} utcHour                     — 0〜23 の整数
+ * @returns {boolean}
+ */
+export function isDigestHour(store, utcHour) {
+  const offset = store?.utcOffset ?? 9;
+  const localHour = ((utcHour + offset) % 24 + 24) % 24;
+  return localHour === 9;
+}

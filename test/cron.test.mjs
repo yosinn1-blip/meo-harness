@@ -33,3 +33,40 @@ test('shouldSendDigest: notifyMode 未設定 → false', () => {
   assert.equal(shouldSendDigest({}), false);
   assert.equal(shouldSendDigest(null), false);
 });
+
+// ── isDigestHour ──────────────────────────────────────────────────────────────
+
+import { isDigestHour } from '../src/cron.mjs';
+
+test('isDigestHour: JST(+9) は UTC 0時に true', () => {
+  assert.equal(isDigestHour({ utcOffset: 9 }, 0), true);
+});
+
+test('isDigestHour: JST(+9) は UTC 1時に false', () => {
+  assert.equal(isDigestHour({ utcOffset: 9 }, 1), false);
+});
+
+test('isDigestHour: KST(+9) は JST と同じ', () => {
+  assert.equal(isDigestHour({ utcOffset: 9 }, 0), true);
+});
+
+test('isDigestHour: 英国 BST(+1) は UTC 8時に true', () => {
+  assert.equal(isDigestHour({ utcOffset: 1 }, 8), true);
+});
+
+test('isDigestHour: 米国 EST(-5) は UTC 14時に true', () => {
+  assert.equal(isDigestHour({ utcOffset: -5 }, 14), true);
+});
+
+test('isDigestHour: utcOffset 未設定は JST(+9) をデフォルトにする', () => {
+  assert.equal(isDigestHour({}, 0), true);
+  assert.equal(isDigestHour({}, 1), false);
+});
+
+test('isDigestHour: UTC-8(PST) は UTC 17時に true', () => {
+  assert.equal(isDigestHour({ utcOffset: -8 }, 17), true);
+});
+
+test('isDigestHour: AEST(+10) は UTC 23時に true（翌日0時を超える折り返し）', () => {
+  assert.equal(isDigestHour({ utcOffset: 10 }, 23), true);
+});

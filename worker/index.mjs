@@ -1,12 +1,13 @@
 // MEO Harness — 中央窓口 Cloudflare Worker
 //
 // エンドポイント:
-//   GET  /health                  — ヘルスチェック
-//   POST /review                  — 口コミ→AI下書き→通知（X-API-Key: store.apiKey）
-//   POST /webhook/:platform       — 外部プラットフォーム Webhook（Yelp/Trustpilot）
-//   POST /signup                  — 設置ウィザード用・公開エンドポイント
-//   PUT  /admin/stores/:storeId   — 店舗設定を KV に登録（X-Admin-Key: ADMIN_KEY）
-//   DELETE /admin/stores/:storeId — 店舗設定を KV から削除（X-Admin-Key: ADMIN_KEY）
+//   GET  /health                         — ヘルスチェック
+//   POST /review                         — 口コミ→AI下書き→通知（X-API-Key: store.apiKey）
+//   POST /webhook/:platform              — 外部プラットフォーム Webhook（Yelp/Trustpilot）
+//   POST /signup                         — 設置ウィザード用・公開エンドポイント
+//   PUT  /admin/stores/:storeId          — 店舗設定を KV に登録（X-Admin-Key: ADMIN_KEY）
+//   DELETE /admin/stores/:storeId        — 店舗設定を KV から削除（X-Admin-Key: ADMIN_KEY）
+//   POST /admin/stores/:storeId/notify/test — テスト通知を送信（X-Admin-Key: ADMIN_KEY）
 //
 // KV スキーマ:
 //   key: "store:{storeId}"
@@ -14,14 +15,14 @@
 //     apiKey, businessName, businessType,
 //     notificationChannel: 'line' | 'telegram'  (省略時 → 'line')
 //     notifyMode: 'immediate' | 'daily-digest'  (省略時 → 'immediate')
-//     timezone: string  (例: 'Asia/Tokyo'。将来のタイムゾーン対応用・現在は未使用)
+//     utcOffset: number  (UTC オフセット整数: +9=JST/KST, +1=BST, -5=EST。省略時 +9)
 //     webhookSecret: string  (Webhook HMAC 署名検証用シークレット)
 //     -- LINE --
 //     lineChannelToken, lineUserId,
 //     -- Telegram --
 //     telegramBotToken, telegramChatId,
 //   }
-//   key: "pending:{storeId}"  — daily-digest モードの未送信レビューバッファ
+//   key: "pending:{storeId}"  — daily-digest モードの未送信レビューバッファ（7日 TTL）
 //   val: Array<{ star, text, name?, draft?, ... }>
 //
 // Secrets（.dev.vars / Workers Secrets）:
@@ -31,7 +32,7 @@
 import { generateReply, PROVIDERS } from '../src/reply-engine.mjs';
 import { verifyLineCredentials } from '../src/line-notify.mjs';
 import { sendDigest } from '../src/notify.mjs';
-import { mergePendingReviews, shouldSendDigest } from '../src/cron.mjs';
+import { mergePendingReviews, shouldSendDigest, isDigestHour } from '../src/cron.mjs';
 
 export default {
   async fetch(request, env) {
@@ -59,8 +60,15 @@ export default {
       }
 
       if (path.startsWith('/admin/stores/')) {
-        const storeId = path.slice('/admin/stores/'.length);
-        if (!storeId) return jsonError('storeId is required in path', 400);
+        const rest = path.slice('/admin/stores/'.length);
+        if (!rest) return jsonError('storeId is required in path', 400);
+
+        if (rest.endsWith('/notify/test')) {
+          const storeId = rest.slice(0, -'/notify/test'.length);
+          if (method === 'POST') return await handleNotifyTest(request, env, storeId);
+        }
+
+        const storeId = rest;
         if (method === 'PUT') return await handleAdminPut(request, env, storeId);
         if (method === 'DELETE') return await handleAdminDelete(request, env, storeId);
       }
@@ -72,11 +80,12 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
+    const utcHour = new Date().getUTCHours();
     const list = await env.STORES.list({ prefix: 'pending:' });
     if (!list.keys.length) return;
 
     const results = await Promise.allSettled(
-      list.keys.map(({ name: key }) => handlePendingStore(key, env))
+      list.keys.map(({ name: key }) => handlePendingStore(key, env, utcHour))
     );
 
     results.forEach((r, i) => {
@@ -115,7 +124,8 @@ async function processReviews(reviews, store, storeId, env) {
     const existingRaw = await env.STORES.get(`pending:${storeId}`);
     const existing = existingRaw ? JSON.parse(existingRaw) : [];
     const merged = mergePendingReviews(existing, processed);
-    await env.STORES.put(`pending:${storeId}`, JSON.stringify(merged));
+    // GDPR/CCPA: 7日後に自動削除（通知失敗が続いても個人データを無期限保持しない）
+    await env.STORES.put(`pending:${storeId}`, JSON.stringify(merged), { expirationTtl: 7 * 24 * 3600 });
     return { buffered: true, count: merged.length };
   }
 
@@ -125,7 +135,7 @@ async function processReviews(reviews, store, storeId, env) {
 
 // ── Cron: pending バッファの処理 ──────────────────────────────────────────────
 
-async function handlePendingStore(pendingKey, env) {
+async function handlePendingStore(pendingKey, env, utcHour) {
   const storeId = pendingKey.slice('pending:'.length);
 
   const [storeRaw, pendingRaw] = await Promise.all([
@@ -139,6 +149,10 @@ async function handlePendingStore(pendingKey, env) {
   }
 
   const store = JSON.parse(storeRaw);
+
+  // タイムゾーンチェック: 店舗の現地 9:00 でなければスキップ（次の該当時刻まで待つ）
+  if (!isDigestHour(store, utcHour)) return;
+
   const reviews = pendingRaw ? JSON.parse(pendingRaw) : [];
   if (!reviews.length) {
     await env.STORES.delete(pendingKey);
@@ -289,6 +303,7 @@ async function handleAdminPut(request, env, storeId) {
     telegramBotToken, telegramChatId,
     businessName, businessType, apiKey,
     notificationChannel, timezone, notifyMode, webhookSecret,
+    utcOffset,
   } = body ?? {};
 
   if (!apiKey) return jsonError('apiKey is required', 400);
@@ -305,6 +320,7 @@ async function handleAdminPut(request, env, storeId) {
     ...(timezone ? { timezone } : {}),
     ...(notifyMode ? { notifyMode } : {}),
     ...(webhookSecret ? { webhookSecret } : {}),
+    ...(utcOffset !== undefined ? { utcOffset: Number(utcOffset) } : {}),
     ...(lineChannelToken ? { lineChannelToken } : {}),
     ...(lineUserId ? { lineUserId } : {}),
     ...(telegramBotToken ? { telegramBotToken } : {}),
@@ -316,8 +332,28 @@ async function handleAdminPut(request, env, storeId) {
 
 async function handleAdminDelete(request, env, storeId) {
   if (!checkAdminAuth(request, env)) return jsonError('Unauthorized', 401);
-  await env.STORES.delete(`store:${storeId}`);
+  await Promise.all([
+    env.STORES.delete(`store:${storeId}`),
+    env.STORES.delete(`pending:${storeId}`),
+  ]);
   return json({ ok: true, storeId, deleted: true });
+}
+
+async function handleNotifyTest(request, env, storeId) {
+  if (!checkAdminAuth(request, env)) return jsonError('Unauthorized', 401);
+  const storeRaw = await env.STORES.get(`store:${storeId}`);
+  if (!storeRaw) return jsonError(`Unknown store: ${storeId}`, 404);
+  const store = JSON.parse(storeRaw);
+
+  const testReview = {
+    star: 5,
+    text: 'MEO Harness テスト通知。この通知が届いていれば設定完了です。\nMEO Harness test notification — configuration successful.',
+    name: 'MEO Harness',
+    draft: '[テスト返信] ご確認いただきありがとうございます。',
+  };
+
+  const result = await sendDigest({ store, reviews: [testReview] });
+  return json({ ok: true, storeId, channel: store.notificationChannel ?? 'line', notify: result });
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
