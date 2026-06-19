@@ -9,11 +9,20 @@
  *   GBP_OAUTH_CLIENT_ID
  *   GBP_OAUTH_CLIENT_SECRET
  *
- * 完了すると:
- *   1. GBP_REFRESH_TOKEN が表示される → Keychain に保存
- *   2. gbpAccountId / gbpLocationId の確認方法を案内
- *   3. Worker Secret への登録コマンドを表示
+ * やること:
+ *   1. ブラウザで Google 認証ページを開く
+ *   2. 許可すると自動でコードを取得（localhost:4100 でキャッチ）
+ *   3. refresh_token と accountId/locationId を表示
+ *   4. Keychain / Worker Secret への保存コマンドを表示
+ *
+ * Google Cloud Console での事前確認（1回だけ）:
+ *   https://console.cloud.google.com/apis/credentials
+ *   → OAuth クライアントID → 承認済みリダイレクト URI に以下を追加:
+ *   http://localhost:4100/callback
  */
+
+import { createServer } from 'node:http';
+import { exec } from 'node:child_process';
 
 const { GBP_OAUTH_CLIENT_ID, GBP_OAUTH_CLIENT_SECRET } = process.env;
 
@@ -21,24 +30,17 @@ if (!GBP_OAUTH_CLIENT_ID || !GBP_OAUTH_CLIENT_SECRET) {
   console.error([
     '',
     '❌ GBP_OAUTH_CLIENT_ID または GBP_OAUTH_CLIENT_SECRET が見つかりません。',
-    '',
-    '  Keychain に保存するコマンド:',
-    "  security add-generic-password -a \"$USER\" -s GBP_OAUTH_CLIENT_ID -w 'YOUR_CLIENT_ID' -U",
-    "  security add-generic-password -a \"$USER\" -s GBP_OAUTH_CLIENT_SECRET -w 'YOUR_SECRET' -U",
-    '',
-    '  Google Cloud Console で OAuth 2.0 クライアントを作成:',
-    '  https://console.cloud.google.com/apis/credentials',
-    '  アプリケーションの種類: デスクトップアプリ',
-    '  リダイレクト URI: urn:ietf:wg:oauth:2.0:oob または http://localhost',
+    '   source ~/.config/ai-keys/load.sh を実行してから再試行してください。',
     '',
   ].join('\n'));
   process.exit(1);
 }
 
+const PORT = 4100;
+const REDIRECT_URI = `http://localhost:${PORT}/callback`;
 const SCOPE = 'https://www.googleapis.com/auth/business.manage';
-const REDIRECT_URI = 'urn:ietf:wg:oauth:2.0:oob';
 
-// ── Step 1: 認証 URL を生成してブラウザで開くよう指示 ─────────────────────────
+// ── Step 1: 認証 URL を組み立ててブラウザで開く ───────────────────────────────
 
 const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
 authUrl.searchParams.set('client_id', GBP_OAUTH_CLIENT_ID);
@@ -46,34 +48,69 @@ authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
 authUrl.searchParams.set('response_type', 'code');
 authUrl.searchParams.set('scope', SCOPE);
 authUrl.searchParams.set('access_type', 'offline');
-authUrl.searchParams.set('prompt', 'consent'); // refresh_token を必ず発行させる
+authUrl.searchParams.set('prompt', 'consent');
 
 console.log('\n📋 GBP OAuth セットアップ\n');
-console.log('Step 1: 以下の URL をブラウザで開き、Google ビジネス プロフィールの管理者アカウントでログイン');
-console.log('        「このアプリはテストモードです」と表示された場合は「続行」をクリック\n');
+console.log('ブラウザで Google 認証ページを開きます...');
+console.log('（自動で開かない場合は以下の URL をブラウザに貼り付けてください）');
+console.log('');
 console.log(authUrl.toString());
 console.log('');
 
-// ── Step 2: 認証コードの入力を待つ ──────────────────────────────────────────
+// macOS でデフォルトブラウザを開く
+exec(`open "${authUrl.toString()}"`);
 
-import { createInterface } from 'node:readline';
-const rl = createInterface({ input: process.stdin, output: process.stdout });
+// ── Step 2: localhost でコールバックを待ち受ける ──────────────────────────────
 
-const code = await new Promise(resolve => {
-  rl.question('Step 2: ブラウザに表示された認証コードを貼り付けてください: ', answer => {
-    rl.close();
-    resolve(answer.trim());
+console.log(`⏳ Google の認証が完了するのを待っています... (localhost:${PORT})\n`);
+
+const code = await new Promise((resolve, reject) => {
+  const server = createServer((req, res) => {
+    const url = new URL(req.url, `http://localhost:${PORT}`);
+
+    if (url.pathname !== '/callback') {
+      res.writeHead(404);
+      res.end('Not found');
+      return;
+    }
+
+    const error = url.searchParams.get('error');
+    if (error) {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`<h2>❌ 認証エラー: ${error}</h2><p>このタブを閉じてください。</p>`);
+      server.close();
+      reject(new Error(`OAuth エラー: ${error}`));
+      return;
+    }
+
+    const authCode = url.searchParams.get('code');
+    if (!authCode) {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<h2>❌ コードが見つかりません</h2><p>このタブを閉じて再試行してください。</p>');
+      server.close();
+      reject(new Error('code パラメータが見つかりません'));
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<h2>✅ 認証完了！</h2><p>このタブを閉じてターミナルに戻ってください。</p>');
+    server.close();
+    resolve(authCode);
   });
-});
 
-if (!code) {
-  console.error('❌ 認証コードが入力されていません。');
-  process.exit(1);
-}
+  server.listen(PORT, () => {});
+  server.on('error', reject);
+
+  // 5分でタイムアウト
+  setTimeout(() => {
+    server.close();
+    reject(new Error('タイムアウト（5分以内に認証が完了しませんでした）'));
+  }, 5 * 60 * 1000);
+});
 
 // ── Step 3: 認証コード → トークン交換 ────────────────────────────────────────
 
-console.log('\n🔄 トークンを取得中...');
+console.log('🔄 トークンを取得中...');
 const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
   method: 'POST',
   headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -88,44 +125,70 @@ const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
 const tokenData = await tokenRes.json();
 
 if (!tokenRes.ok || !tokenData.refresh_token) {
-  console.error('❌ トークン取得失敗:', JSON.stringify(tokenData, null, 2));
+  console.error('\n❌ トークン取得失敗:', JSON.stringify(tokenData, null, 2));
+  console.error('\n💡 Google Cloud Console でリダイレクト URI が登録されているか確認してください:');
+  console.error(`   ${REDIRECT_URI}`);
   process.exit(1);
 }
 
 const refreshToken = tokenData.refresh_token;
-console.log('\n✅ refresh_token を取得しました！\n');
+console.log('\n✅ 認証成功！\n');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('🔑 refresh_token（以下を Keychain に保存してください）:');
+console.log('');
+console.log(refreshToken);
+console.log('');
+console.log('  保存コマンド:');
+console.log(`  security add-generic-password -a "$USER" -s GBP_REFRESH_TOKEN -w '${refreshToken}' -U`);
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('');
 
 // ── Step 4: アカウント/ロケーション ID を取得 ─────────────────────────────────
 
-console.log('🔍 GBP アカウント一覧を取得中...');
+console.log('🔍 GBP アカウントとロケーションを取得中...');
 const accountsRes = await fetch('https://mybusiness.googleapis.com/v4/accounts', {
   headers: { Authorization: `Bearer ${tokenData.access_token}` },
 });
-const accountsData = await accountsRes.json();
+
+let accountsData;
+try {
+  accountsData = await accountsRes.json();
+} catch {
+  const text = await accountsRes.text().catch(() => '');
+  console.log('⚠️  アカウント取得で予期しないレスポンス（API 未有効化の可能性）');
+  console.log('   Google Cloud Console で API を有効化:');
+  console.log('   https://console.cloud.google.com/apis/library/mybusiness.googleapis.com');
+  accountsData = {};
+}
+
+let gbpAccountId = '';
+let gbpLocationId = '';
 
 if (!accountsRes.ok) {
-  console.error('❌ アカウント取得失敗:', JSON.stringify(accountsData, null, 2));
-  console.log('\n以下を手動で確認してください:');
-  console.log('https://business.google.com/dashboard');
+  console.log('⚠️  アカウント取得失敗（API 承認待ちの可能性あり）:', accountsData.error?.message ?? JSON.stringify(accountsData));
+  console.log('   後ほど Google Business Profile API の有効化を確認してください:');
+  console.log('   https://console.cloud.google.com/apis/library/mybusiness.googleapis.com');
 } else {
   const accounts = accountsData.accounts ?? [];
   if (!accounts.length) {
-    console.log('⚠️  GBP アカウントが見つかりませんでした。');
-    console.log('   このアカウントに Google ビジネス プロフィールが紐付いているか確認してください。');
+    console.log('⚠️  このアカウントに紐付く GBP アカウントが見つかりませんでした。');
   } else {
-    console.log(`✅ ${accounts.length} 件のアカウントが見つかりました:\n`);
+    console.log(`\n📍 見つかったアカウントとロケーション:\n`);
     for (const acc of accounts) {
-      console.log(`  gbpAccountId: "${acc.name}"  (${acc.accountName ?? acc.name})`);
+      console.log(`  アカウント: ${acc.name}  (${acc.accountName ?? ''})`);
+      gbpAccountId = gbpAccountId || acc.name;
 
-      // ロケーション一覧を取得
-      const locsRes = await fetch(`https://mybusiness.googleapis.com/v4/${acc.name}/locations?pageSize=20`, {
-        headers: { Authorization: `Bearer ${tokenData.access_token}` },
-      });
+      const locsRes = await fetch(
+        `https://mybusiness.googleapis.com/v4/${acc.name}/locations?pageSize=20`,
+        { headers: { Authorization: `Bearer ${tokenData.access_token}` } },
+      );
       const locsData = await locsRes.json();
       const locations = locsData.locations ?? [];
 
       for (const loc of locations) {
-        console.log(`    gbpLocationId: "${loc.name}"  (${loc.locationName ?? loc.title ?? loc.name})`);
+        const locName = loc.locationName ?? loc.title ?? loc.name;
+        console.log(`    ロケーション: ${loc.name}  (${locName})`);
+        gbpLocationId = gbpLocationId || loc.name;
       }
       console.log('');
     }
@@ -134,28 +197,21 @@ if (!accountsRes.ok) {
 
 // ── Step 5: 次のステップを表示 ───────────────────────────────────────────────
 
-console.log('─────────────────────────────────────────────────────────────────');
-console.log('次のステップ:');
+console.log('═══════════════════════════════════════════════════════════════');
+console.log('次のステップ（以下をターミナルで実行してください）:');
 console.log('');
-console.log('1. Keychain に refresh_token を保存（以下のコマンドをターミナルで実行）:');
-console.log(`   security add-generic-password -a "$USER" -s GBP_REFRESH_TOKEN -w '${refreshToken}' -U`);
+console.log('【1】refresh_token を Keychain に保存:');
+console.log(`  security add-generic-password -a "$USER" -s GBP_REFRESH_TOKEN -w '${refreshToken}' -U`);
 console.log('');
-console.log('2. ~/.config/ai-keys/load.sh に追記:');
-console.log('   GBP_REFRESH_TOKEN \\');
+console.log('【2】Claude に以下を伝えて Worker と店舗に設定してもらう:');
 console.log('');
-console.log('3. Worker Secret に登録（Claude に依頼 or 以下のコマンド）:');
-console.log('   source ~/.config/ai-keys/load.sh');
-console.log('   echo "$GBP_OAUTH_CLIENT_ID" | npx wrangler@4 secret put GBP_OAUTH_CLIENT_ID');
-console.log('   echo "$GBP_OAUTH_CLIENT_SECRET" | npx wrangler@4 secret put GBP_OAUTH_CLIENT_SECRET');
+console.log(`  GBP_REFRESH_TOKEN を Worker Secret に登録して、`);
+console.log(`  yoshiki-apps 店舗に以下を追加してください:`);
+console.log(`    gbpRefreshToken: <Keychain の GBP_REFRESH_TOKEN>`);
+if (gbpAccountId) console.log(`    gbpAccountId:    "${gbpAccountId}"`);
+if (gbpLocationId) console.log(`    gbpLocationId:   "${gbpLocationId}"`);
 console.log('');
-console.log('4. 店舗に GBP 設定を登録（Claude に依頼）:');
-console.log('   gbpRefreshToken: <上記 refresh_token>');
-console.log('   gbpAccountId:    <上記で確認した accounts/xxx>');
-console.log('   gbpLocationId:   <上記で確認した locations/xxx>');
-console.log('');
-console.log('5. LINE Developer Console で Webhook URL を設定:');
-console.log('   https://developers.line.biz/console/');
-console.log('   Webhook URL: https://meo-harness.yosinn1.workers.dev/webhook/line-bot');
-console.log('   LINE_CHANNEL_SECRET を取得して Keychain に保存:');
-console.log("   security add-generic-password -a \"$USER\" -s LINE_CHANNEL_SECRET -w 'YOUR_SECRET' -U");
-console.log('');
+console.log('【3】LINE Webhook 設定（別途）:');
+console.log('  LINE Developer Console → Webhook URL に登録:');
+console.log('  https://meo-harness.yosinn1.workers.dev/webhook/line-bot');
+console.log('═══════════════════════════════════════════════════════════════');

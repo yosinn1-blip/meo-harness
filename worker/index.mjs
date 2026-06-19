@@ -112,6 +112,15 @@ export default {
         }
       });
     }
+
+    // ③ Gmail 経由 GBP クチコミ監視（GBP API 承認待ちのブリッジ）
+    if (env.GMAIL_REFRESH_TOKEN && env.GBP_OAUTH_CLIENT_ID && env.GBP_OAUTH_CLIENT_SECRET) {
+      try {
+        await pollGmailReviews(env);
+      } catch (err) {
+        console.error('[cron/gmail] failed:', err.message);
+      }
+    }
   },
 };
 
@@ -155,6 +164,69 @@ async function pollGbpStore(storeKey, env) {
     new Date(a.createTime) > new Date(b.createTime) ? a : b
   );
   await env.STORES.put(`gbp-last:${storeId}`, latest.createTime);
+}
+
+// ── Gmail 経由 GBP クチコミ監視（Cron から呼び出し） ─────────────────────────
+
+async function pollGmailReviews(env) {
+  const { fetchReviewNotificationEmails, parseGbpReviewEmail } = await import('../src/gmail-reviews.mjs');
+
+  const lastRaw = await env.STORES.get('gmail-last:global');
+  const lastDate = lastRaw
+    ? new Date(lastRaw)
+    : new Date(Date.now() - 30 * 24 * 3600 * 1000);
+
+  const emails = await fetchReviewNotificationEmails({
+    clientId: env.GBP_OAUTH_CLIENT_ID,
+    clientSecret: env.GBP_OAUTH_CLIENT_SECRET,
+    refreshToken: env.GMAIL_REFRESH_TOKEN,
+  });
+
+  const newEmails = emails.filter((e) => {
+    const d = new Date(e.date);
+    return !isNaN(d.getTime()) && d > lastDate;
+  });
+
+  if (!newEmails.length) return;
+
+  // 全ストアを取得して businessName でマッチング
+  const storeList = await env.STORES.list({ prefix: 'store:' });
+  const stores = [];
+  for (const { name: key } of storeList.keys) {
+    const raw = await env.STORES.get(key);
+    if (raw) stores.push({ store: JSON.parse(raw), storeId: key.slice('store:'.length) });
+  }
+  if (!stores.length) return;
+
+  for (const email of newEmails) {
+    const parsed = parseGbpReviewEmail(email);
+    if (!parsed) continue;
+
+    const match = parsed.businessName
+      ? stores.find((s) => s.store.businessName === parsed.businessName)
+      : stores[0];
+    if (!match) continue;
+
+    const review = {
+      platform: 'gbp-mail',
+      star: parsed.star,
+      text: parsed.text ?? parsed.rawText,
+      name: parsed.name ?? 'Unknown',
+    };
+
+    await processReviews([review], match.store, match.storeId, env).catch((err) => {
+      console.error(`[cron/gmail] processReviews failed for ${match.storeId}:`, err.message);
+    });
+  }
+
+  // 最新メールの日時を記録
+  const latestDate = newEmails
+    .map((e) => new Date(e.date))
+    .filter((d) => !isNaN(d.getTime()))
+    .sort((a, b) => b - a)[0];
+  if (latestDate) {
+    await env.STORES.put('gmail-last:global', latestDate.toISOString());
+  }
 }
 
 // ── 共通パイプライン ──────────────────────────────────────────────────────────

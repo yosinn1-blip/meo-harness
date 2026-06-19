@@ -113,7 +113,54 @@ export async function getMessage({ accessToken, id, fetchImpl }) {
 
 // GBPの所有権リクエスト通知で確認されている送信元（レビュー通知も同じGoogle Business Profile
 // ブランドの送信元を使っている可能性が高いが、件名・本文の正確な実例は未確認）。
-const KNOWN_GBP_SENDERS = ["businessprofile-noreply@google.com", "google-my-business-noreply@google.com"];
+export const KNOWN_GBP_SENDERS = ["businessprofile-noreply@google.com", "google-my-business-noreply@google.com"];
+
+/**
+ * GBP「新しいクチコミ」通知メールを解析して review オブジェクトを返す。
+ * 実例メールが届いたら正規表現を調整すること（2026-06 時点では未着のため best-effort）。
+ * @param {object} msg - getMessage() の戻り値
+ * @returns {{businessName:string, star:number|null, text:string|null, name:string|null, rawText:string}|null}
+ *   null = GBP クチコミ通知ではないと判断した場合
+ */
+export function parseGbpReviewEmail(msg) {
+  const from = msg.from?.toLowerCase() ?? "";
+  if (!KNOWN_GBP_SENDERS.some((s) => from.includes(s))) return null;
+
+  const body = msg.text || (msg.html ?? "").replace(/<[^>]+>/g, " ");
+  const subject = msg.subject ?? "";
+
+  // 店舗名: 「○○」/ "○○" / "○○" received a new review
+  const bizMatch =
+    subject.match(/「(.+?)」/) ||
+    subject.match(/"(.+?)"/) ||
+    subject.match(/^"(.+?)"/) ||
+    subject.match(/^(.+?)(?:\s+(?:に|received|got))/);
+  const businessName = bizMatch ? bizMatch[1].trim() : "";
+
+  // 星評価: ★★★★☆ / "5 star rating" / "Rating: 4/5"
+  let star = null;
+  const starJa = body.match(/[★☆]{1,5}/);
+  if (starJa) {
+    const count = [...starJa[0]].filter((c) => c === "★").length;
+    if (count > 0) star = count;
+  }
+  if (!star) {
+    const starEn = body.match(/(\d)\s*(?:star|\/5)/i);
+    if (starEn) star = Math.min(5, Math.max(1, parseInt(starEn[1], 10)));
+  }
+
+  // レビュアー名
+  const reviewerMatch = body.match(/^(.{1,40}?)\s*(?:が|さん|によって)\s*(?:投稿|クチコミ|レビュー)/m) ||
+    body.match(/(?:by|from)\s+(.{1,40}?)[\n,]/i);
+  const name = reviewerMatch ? reviewerMatch[1].trim() : null;
+
+  // レビュー本文（20 文字以上の行を最大 3 つ結合）
+  const lines = body.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const long = lines.filter((l) => l.length >= 20 && l.length <= 800);
+  const text = long.length ? long.slice(0, 3).join(" ") : null;
+
+  return { businessName, star, text, name, rawText: body.slice(0, 1000) };
+}
 
 /**
  * GBPの「新しいクチコミ」通知メールを検索し、本文まで取得する。
