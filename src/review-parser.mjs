@@ -15,6 +15,7 @@ export function normalize(platform, raw) {
     case 'gbp': return normalizeGbp(raw);
     case 'yelp': return normalizeYelp(raw);
     case 'trustpilot': return normalizeTrustpilot(raw);
+    case 'yahoo-places': return normalizeYahooPlaces(raw);
     default: throw new Error(`Unsupported platform: ${platform}`);
   }
 }
@@ -57,5 +58,21 @@ function normalizeTrustpilot(raw) {
     text,
     name: review?.consumer?.displayName,
     platform: 'trustpilot',
+  };
+}
+
+// Yahoo!プレイス パートナー API Webhook または内部プッシュ形式を正規化する。
+// event.review ラップあり・なし両方を受け付ける。
+function normalizeYahooPlaces(raw) {
+  const review = raw?.review ?? raw;
+  const star = Number(review?.rating);
+  if (!Number.isInteger(star) || star < 1 || star > 5) {
+    throw new Error(`Yahoo!Places: invalid rating "${review?.rating}"`);
+  }
+  return {
+    star,
+    text: review?.comment ?? '',
+    name: review?.userName,
+    platform: 'yahoo-places',
   };
 }

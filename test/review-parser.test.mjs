@@ -85,6 +85,46 @@ test('normalize trustpilot: stars=0 はエラー', () => {
   assert.throws(() => normalize('trustpilot', { stars: 0 }), /invalid stars/);
 });
 
+// ── Yahoo!プレイス ────────────────────────────────────────────────────────────
+
+test('normalize yahoo-places: event.review ラップあり', () => {
+  const raw = {
+    event: 'review.created',
+    review: { reviewId: 'yp-001', rating: 4, comment: '良いお店です', userName: '山田太郎' },
+  };
+  const r = normalize('yahoo-places', raw);
+  assert.equal(r.star, 4);
+  assert.equal(r.text, '良いお店です');
+  assert.equal(r.name, '山田太郎');
+  assert.equal(r.platform, 'yahoo-places');
+});
+
+test('normalize yahoo-places: フラット構造（直置き）', () => {
+  const r = normalize('yahoo-places', { rating: 5, comment: '最高！', userName: '佐藤花子' });
+  assert.equal(r.star, 5);
+  assert.equal(r.text, '最高！');
+  assert.equal(r.name, '佐藤花子');
+});
+
+test('normalize yahoo-places: コメントなしは空文字', () => {
+  const r = normalize('yahoo-places', { rating: 3 });
+  assert.equal(r.text, '');
+  assert.equal(r.name, undefined);
+});
+
+test('normalize yahoo-places: rating=0 はエラー', () => {
+  assert.throws(() => normalize('yahoo-places', { rating: 0 }), /invalid rating/);
+});
+
+test('normalize yahoo-places: rating=6 はエラー', () => {
+  assert.throws(() => normalize('yahoo-places', { rating: 6 }), /invalid rating/);
+});
+
+test('normalize yahoo-places: rating が文字列でも整数変換される', () => {
+  const r = normalize('yahoo-places', { rating: '3', comment: 'ふつう' });
+  assert.equal(r.star, 3);
+});
+
 // ── 未知プラットフォーム ───────────────────────────────────────────────────────
 
 test('normalize: 未知プラットフォームはエラー', () => {

@@ -3,8 +3,9 @@
 // エンドポイント:
 //   GET  /health                         — ヘルスチェック
 //   POST /review                         — 口コミ→AI下書き→通知（X-API-Key: store.apiKey）
-//   POST /webhook/:platform              — 外部プラットフォーム Webhook（Yelp/Trustpilot）
+//   POST /webhook/:platform              — 外部プラットフォーム Webhook（Yelp/Trustpilot/Yahoo!プレイス）
 //   POST /signup                         — 設置ウィザード用・公開エンドポイント
+//   GET  /admin/stores/:storeId/status   — 店舗ステータス確認（X-Admin-Key: ADMIN_KEY）
 //   PUT  /admin/stores/:storeId          — 店舗設定を KV に登録（X-Admin-Key: ADMIN_KEY）
 //   DELETE /admin/stores/:storeId        — 店舗設定を KV から削除（X-Admin-Key: ADMIN_KEY）
 //   POST /admin/stores/:storeId/notify/test — テスト通知を送信（X-Admin-Key: ADMIN_KEY）
@@ -66,6 +67,11 @@ export default {
         if (rest.endsWith('/notify/test')) {
           const storeId = rest.slice(0, -'/notify/test'.length);
           if (method === 'POST') return await handleNotifyTest(request, env, storeId);
+        }
+
+        if (rest.endsWith('/status')) {
+          const storeId = rest.slice(0, -'/status'.length);
+          if (method === 'GET') return await handleAdminStatus(request, env, storeId);
         }
 
         const storeId = rest;
@@ -337,6 +343,33 @@ async function handleAdminDelete(request, env, storeId) {
     env.STORES.delete(`pending:${storeId}`),
   ]);
   return json({ ok: true, storeId, deleted: true });
+}
+
+async function handleAdminStatus(request, env, storeId) {
+  if (!checkAdminAuth(request, env)) return jsonError('Unauthorized', 401);
+
+  const [storeRaw, pendingRaw] = await Promise.all([
+    env.STORES.get(`store:${storeId}`),
+    env.STORES.get(`pending:${storeId}`),
+  ]);
+
+  if (!storeRaw) return jsonError(`Unknown store: ${storeId}`, 404);
+
+  const store = JSON.parse(storeRaw);
+  const pending = pendingRaw ? JSON.parse(pendingRaw) : [];
+
+  return json({
+    ok: true,
+    storeId,
+    businessName: store.businessName ?? null,
+    businessType: store.businessType ?? null,
+    notificationChannel: store.notificationChannel ?? 'line',
+    notifyMode: store.notifyMode ?? 'immediate',
+    utcOffset: store.utcOffset ?? 9,
+    hasPending: pending.length > 0,
+    pendingCount: pending.length,
+    hasWebhookSecret: Boolean(store.webhookSecret),
+  });
 }
 
 async function handleNotifyTest(request, env, storeId) {

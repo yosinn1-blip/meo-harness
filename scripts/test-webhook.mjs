@@ -16,7 +16,7 @@ import { createHmac } from 'node:crypto';
 const WORKER_URL = 'https://meo-harness.yosinn1.workers.dev';
 
 const args = process.argv.slice(2);
-const platform = args.find(a => ['yelp', 'trustpilot', 'all'].includes(a)) ?? 'all';
+const platform = args.find(a => ['yelp', 'trustpilot', 'yahoo-places', 'all'].includes(a)) ?? 'all';
 const storeId = args.find(a => a.startsWith('--store='))?.slice('--store='.length) ?? 'yoshiki-apps';
 const secretArg = args.find(a => a.startsWith('--secret='))?.slice('--secret='.length);
 const secret = secretArg ?? process.env.WEBHOOK_TEST_SECRET;
@@ -71,9 +71,21 @@ const trustpilotPayload = {
   },
 };
 
+// ── Yahoo!プレイス ────────────────────────────────────────────────────────────
+const yahooPlacesPayload = {
+  event: 'review.created',
+  review: {
+    reviewId: 'yp-test-001',
+    rating: 4,
+    comment: 'とても丁寧な対応でした。また利用したいです。',
+    userName: 'テスト太郎',
+  },
+};
+
 const tests = [];
 if (platform === 'yelp' || platform === 'all') tests.push({ platform: 'yelp', payload: yelpPayload });
 if (platform === 'trustpilot' || platform === 'all') tests.push({ platform: 'trustpilot', payload: trustpilotPayload });
+if (platform === 'yahoo-places' || platform === 'all') tests.push({ platform: 'yahoo-places', payload: yahooPlacesPayload });
 
 for (const { platform: p, payload } of tests) {
   process.stdout.write(`  [${p}] 送信中...`);
