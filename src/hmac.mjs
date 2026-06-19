@@ -26,8 +26,37 @@ export async function verifyHmac(secret, body, signature) {
   return timingSafeEqual(expected, signature.toLowerCase());
 }
 
+/**
+ * LINE Messaging API Webhook の署名検証。
+ * LINE は HMAC-SHA256 を Base64 エンコードして X-Line-Signature ヘッダに付与する。
+ * @param {string} channelSecret — LINE チャネルシークレット
+ * @param {string} body          — 受信した生 HTTP ボディ文字列
+ * @param {string} signature     — X-Line-Signature ヘッダの値（Base64）
+ * @returns {Promise<boolean>}
+ */
+export async function verifyLineSignature(channelSecret, body, signature) {
+  if (!channelSecret || !signature) return false;
+
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(channelSecret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+
+  const mac = await crypto.subtle.sign('HMAC', key, enc.encode(body));
+  const expected = toBase64(new Uint8Array(mac));
+
+  return timingSafeEqual(expected, signature);
+}
+
 function toHex(bytes) {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function toBase64(bytes) {
+  return btoa(String.fromCharCode(...bytes));
 }
 
 function timingSafeEqual(a, b) {

@@ -1,21 +1,58 @@
 // MEO Harness — 通知チャネル抽象化レイヤー
 //
-// 各チャネルプロバイダを共通インターフェースで差し替え可能にする。
-// 既定チャネル: line（後方互換維持）
-// グローバル用追加: telegram（審査なし・無料・4096字）
+// sendDigest({ store, reviews }) を呼ぶだけで、
+// store.notificationChannel に応じて LINE / Telegram に配信する。
 //
-// インターフェース:
-//   sendDigest({ store, reviews, dryRun?, fetchImpl? })
-//     → Promise<{ sent, dryRun?, payload?, skipped? }>
-//
-// KV store スキーマに notificationChannel を追加することで切替可能（未設定 → 'line'）:
-//   line:     { lineChannelToken, lineUserId }
-//   telegram: { telegramBotToken, telegramChatId }
+// LINE: reviews に replyId が含まれる場合は Flex Message（承認ボタン付き）を送る。
+//       含まれない場合はプレーンテキストのダイジェストを送る。
+// Telegram: 常にプレーンテキスト。
 
 import { sendLineDigest, buildDigestText } from './line-notify.mjs';
+import { buildFlexPayload } from './line-flex.mjs';
 
+const LINE_PUSH_URL = 'https://api.line.me/v2/bot/message/push';
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
 const TELEGRAM_MAX_TEXT = 4096;
+
+// ── LINE ─────────────────────────────────────────────────────────────────────
+
+async function sendViaLine({ store, reviews, dryRun = false, fetchImpl }) {
+  const hasInteractive = reviews.some(r => r.replyId);
+
+  if (hasInteractive) {
+    const payload = buildFlexPayload({
+      to: store.lineUserId,
+      reviews,
+      bizName: store.businessName,
+    });
+
+    if (dryRun) return { dryRun: true, payload, sent: 0 };
+
+    const _fetch = fetchImpl ?? globalThis.fetch;
+    const res = await _fetch(LINE_PUSH_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${store.lineChannelToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`LINE Flex ${res.status}: ${body.slice(0, 200)}`);
+    }
+    return { sent: 1, payload };
+  }
+
+  return sendLineDigest({
+    channelAccessToken: store.lineChannelToken,
+    to: store.lineUserId,
+    reviews,
+    digest: { bizName: store.businessName },
+    dryRun,
+    fetchImpl,
+  });
+}
 
 // ── Telegram ──────────────────────────────────────────────────────────────────
 
@@ -48,33 +85,13 @@ async function sendViaTelegram({ store, reviews, dryRun = false, fetchImpl }) {
 
 // ── 公開インターフェース ────────────────────────────────────────────────────────
 
-/**
- * 新着クチコミのダイジェストを、店舗の notificationChannel に応じて送信する。
- * @param {object} args
- * @param {object} args.store  KV から取得した店舗オブジェクト
- * @param {Array}  args.reviews
- * @param {boolean} [args.dryRun]
- * @param {function} [args.fetchImpl]
- */
 export async function sendDigest({ store, reviews, dryRun = false, fetchImpl }) {
   if (!reviews?.length) return { skipped: 'no-reviews', sent: 0 };
 
   const channel = store.notificationChannel ?? 'line';
 
-  if (channel === 'line') {
-    return sendLineDigest({
-      channelAccessToken: store.lineChannelToken,
-      to: store.lineUserId,
-      reviews,
-      digest: { bizName: store.businessName },
-      dryRun,
-      fetchImpl,
-    });
-  }
-
-  if (channel === 'telegram') {
-    return sendViaTelegram({ store, reviews, dryRun, fetchImpl });
-  }
+  if (channel === 'line') return sendViaLine({ store, reviews, dryRun, fetchImpl });
+  if (channel === 'telegram') return sendViaTelegram({ store, reviews, dryRun, fetchImpl });
 
   throw new Error(`Unknown notification channel: ${channel}`);
 }

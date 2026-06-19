@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { verifyHmac } from '../src/hmac.mjs';
+import { verifyHmac, verifyLineSignature } from '../src/hmac.mjs';
+
+function signBase64(secret, body) {
+  return createHmac('sha256', secret).update(body).digest('base64');
+}
 
 function sign(secret, body) {
   return createHmac('sha256', secret).update(body).digest('hex');
@@ -54,4 +58,27 @@ test('verifyHmac: 空ボディも正しく検証できる', async () => {
   const body = '';
   const sig = sign(secret, body);
   assert.equal(await verifyHmac(secret, body, sig), true);
+});
+
+// ── verifyLineSignature ───────────────────────────────────────────────────────
+
+test('verifyLineSignature: 正しい Base64 HMAC は true を返す', async () => {
+  const secret = 'line-channel-secret';
+  const body = '{"events":[]}';
+  const sig = signBase64(secret, body);
+  assert.equal(await verifyLineSignature(secret, body, sig), true);
+});
+
+test('verifyLineSignature: 間違った secret は false を返す', async () => {
+  const body = '{"events":[]}';
+  const sig = signBase64('correct', body);
+  assert.equal(await verifyLineSignature('wrong', body, sig), false);
+});
+
+test('verifyLineSignature: 空の channelSecret は false を返す', async () => {
+  assert.equal(await verifyLineSignature('', '{}', 'abc'), false);
+});
+
+test('verifyLineSignature: 空の signature は false を返す', async () => {
+  assert.equal(await verifyLineSignature('secret', '{}', ''), false);
 });
