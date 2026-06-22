@@ -2,3 +2,17 @@
 # コピー: cp .dev.vars.example .dev.vars && <値を書き換え>
 GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxx
 ADMIN_KEY=changeme-generate-a-long-random-string
+
+# WhatsApp Business Cloud API
+# テスト: 電話番号 ID = 1222481350942430（テスト番号 +1 555 654 3008）
+# 本番: Meta Business Verification 後に新電話番号 ID に差し替える
+WHATSAPP_TOKEN=<Meta User Token または System User Token>
+WHATSAPP_PHONE_NUMBER_ID=1222481350942430
+# Webhook 検証トークン（任意の文字列。Meta Dashboard の Webhook 設定と一致させる）
+WHATSAPP_VERIFY_TOKEN=changeme-whatsapp-verify-token
+
+# Google Business Profile API（店舗登録時に取得）
+GBP_OAUTH_CLIENT_ID=<Google Cloud Console OAuth クライアント ID>
+GBP_OAUTH_CLIENT_SECRET=<Google Cloud Console OAuth クライアントシークレット>
+# Gmail 経由クチコミ監視（GBP API 承認前のブリッジ。オプション）
+GMAIL_REFRESH_TOKEN=<Gmail OAuth refresh_token>

@@ -18,11 +18,14 @@
 //   "gbp-last:{storeId}" — GBP ポーリング最終確認日時（ISO文字列）
 //
 // Worker Secrets:
-//   GROQ_API_KEY           — Groq API キー
-//   ADMIN_KEY              — 管理エンドポイント認証
-//   GBP_OAUTH_CLIENT_ID    — Google OAuth クライアント ID
-//   GBP_OAUTH_CLIENT_SECRET — Google OAuth クライアントシークレット
-//   LINE_CHANNEL_SECRET    — LINE Bot チャネルシークレット（Webhook 署名検証用）
+//   GROQ_API_KEY             — Groq API キー
+//   ADMIN_KEY                — 管理エンドポイント認証
+//   GBP_OAUTH_CLIENT_ID      — Google OAuth クライアント ID
+//   GBP_OAUTH_CLIENT_SECRET  — Google OAuth クライアントシークレット
+//   LINE_CHANNEL_SECRET      — LINE Bot チャネルシークレット（Webhook 署名検証用）
+//   WHATSAPP_TOKEN           — Meta System User Token（Meta Business Manager）
+//   WHATSAPP_PHONE_NUMBER_ID — WhatsApp 送信元電話番号 ID
+//   WHATSAPP_VERIFY_TOKEN    — WhatsApp Webhook 検証トークン（任意文字列）
 
 import { generateReply, PROVIDERS } from '../src/reply-engine.mjs';
 import { verifyLineCredentials } from '../src/line-notify.mjs';
@@ -49,6 +52,17 @@ export default {
         return await handleLineBotWebhook(request, env, ctx);
       }
 
+      // WhatsApp Webhook（platform ルートより前に評価）
+      if (path === '/webhook/whatsapp') {
+        if (method === 'GET') return handleWhatsAppVerify(url, env);
+        if (method === 'POST') return await handleWhatsAppWebhook(request, env, ctx);
+      }
+
+      // GBP OAuth フロー
+      if (method === 'GET' && path === '/gbp/oauth/callback') {
+        return await handleGbpOAuthCallback(url, env);
+      }
+
       if (path.startsWith('/webhook/')) {
         const platform = path.slice('/webhook/'.length);
         if (method === 'POST') return await handleWebhook(request, env, platform);
@@ -66,6 +80,16 @@ export default {
         if (rest.endsWith('/notify/test')) {
           const storeId = rest.slice(0, -'/notify/test'.length);
           if (method === 'POST') return await handleNotifyTest(request, env, storeId);
+        }
+
+        if (rest.endsWith('/gbp/oauth/start')) {
+          const storeId = rest.slice(0, -'/gbp/oauth/start'.length);
+          if (method === 'POST') return await handleGbpOAuthStart(request, env, storeId);
+        }
+
+        if (rest.endsWith('/gbp/locations')) {
+          const storeId = rest.slice(0, -'/gbp/locations'.length);
+          if (method === 'GET') return await handleGbpLocations(request, env, storeId);
         }
 
         if (rest.endsWith('/status')) {
@@ -278,7 +302,7 @@ async function processReviews(reviews, store, storeId, env) {
     return { buffered: true, count: merged.length };
   }
 
-  const notifyResult = await sendDigest({ store, reviews: processedWithReplyIds });
+  const notifyResult = await sendDigest({ store: withEnvCredentials(store, env), reviews: processedWithReplyIds });
   return { buffered: false, processed: processed.length, failed, notify: notifyResult };
 }
 
@@ -321,7 +345,7 @@ async function handlePendingStore(pendingKey, env, utcHour) {
     r.status === 'fulfilled' ? r.value : { ...reviews[i], draft: null }
   );
 
-  await sendDigest({ store, reviews: processed });
+  await sendDigest({ store: withEnvCredentials(store, env), reviews: processed });
   await env.STORES.delete(pendingKey);
 }
 
@@ -542,6 +566,7 @@ async function handleAdminStatus(request, env, storeId) {
     notifyMode: store.notifyMode ?? 'immediate',
     utcOffset: store.utcOffset ?? 9,
     hasGbpConfig: Boolean(store.gbpRefreshToken && store.gbpAccountId && store.gbpLocationId),
+    hasWhatsAppConfig: Boolean(store.whatsappRecipient),
     lastGbpPoll: lastGbpPoll ?? null,
     hasPending: pending.length > 0,
     pendingCount: pending.length,
@@ -558,6 +583,7 @@ async function handleAdminPut(request, env, storeId) {
   const {
     lineChannelToken, lineUserId,
     telegramBotToken, telegramChatId,
+    whatsappRecipient, whatsappTemplateName, whatsappTemplateLang,
     gbpRefreshToken, gbpAccountId, gbpLocationId,
     businessName, businessType, apiKey,
     notificationChannel, timezone, notifyMode, webhookSecret,
@@ -572,6 +598,9 @@ async function handleAdminPut(request, env, storeId) {
   if (channel === 'telegram' && (!telegramBotToken || !telegramChatId)) {
     return jsonError('telegramBotToken and telegramChatId are required for telegram channel', 400);
   }
+  if (channel === 'whatsapp' && !whatsappRecipient) {
+    return jsonError('whatsappRecipient is required for whatsapp channel', 400);
+  }
 
   const store = {
     apiKey, businessName, businessType, notificationChannel: channel,
@@ -583,6 +612,9 @@ async function handleAdminPut(request, env, storeId) {
     ...(lineUserId ? { lineUserId } : {}),
     ...(telegramBotToken ? { telegramBotToken } : {}),
     ...(telegramChatId ? { telegramChatId } : {}),
+    ...(whatsappRecipient ? { whatsappRecipient } : {}),
+    ...(whatsappTemplateName ? { whatsappTemplateName } : {}),
+    ...(whatsappTemplateLang ? { whatsappTemplateLang } : {}),
     ...(gbpRefreshToken ? { gbpRefreshToken } : {}),
     ...(gbpAccountId ? { gbpAccountId } : {}),
     ...(gbpLocationId ? { gbpLocationId } : {}),
@@ -601,6 +633,168 @@ async function handleAdminDelete(request, env, storeId) {
   return json({ ok: true, storeId, deleted: true });
 }
 
+// ── /webhook/whatsapp ─────────────────────────────────────────────────────────
+
+function handleWhatsAppVerify(url, env) {
+  const mode = url.searchParams.get('hub.mode');
+  const token = url.searchParams.get('hub.verify_token');
+  const challenge = url.searchParams.get('hub.challenge');
+  if (mode === 'subscribe' && env.WHATSAPP_VERIFY_TOKEN && token === env.WHATSAPP_VERIFY_TOKEN) {
+    return new Response(challenge, { status: 200 });
+  }
+  return jsonError('Webhook verification failed', 403);
+}
+
+async function handleWhatsAppWebhook(request, env, ctx) {
+  // Meta は 200 を素早く返すことを要求するため、処理を waitUntil に移す
+  ctx.waitUntil(processWhatsAppEvents(request));
+  return json({ ok: true });
+}
+
+async function processWhatsAppEvents(request) {
+  let body;
+  try { body = await request.json(); } catch { return; }
+
+  for (const entry of body.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      for (const s of change.value?.statuses ?? []) {
+        console.log(`[whatsapp] message ${s.id} → ${s.status} (${s.recipient_id ?? ''})`);
+      }
+    }
+  }
+}
+
+// ── GBP OAuth フロー ──────────────────────────────────────────────────────────
+//
+// 使い方:
+//   1. POST /admin/stores/:storeId/gbp/oauth/start  → { oauthUrl }
+//   2. オーナーがブラウザで oauthUrl を開く
+//   3. Google 認証後 → /gbp/oauth/callback に戻ってくる（自動）
+//   4. refresh_token が store KV に保存される
+//
+// 前提: GBP_OAUTH_CLIENT_ID / GBP_OAUTH_CLIENT_SECRET が Worker Secret に設定済み
+
+const GBP_OAUTH_SCOPES = 'https://www.googleapis.com/auth/business.manage';
+const GBP_OAUTH_STATE_TTL = 600; // 10分
+
+async function handleGbpOAuthStart(request, env, storeId) {
+  if (!checkAdminAuth(request, env)) return jsonError('Unauthorized', 401);
+  if (!env.GBP_OAUTH_CLIENT_ID) return jsonError('GBP_OAUTH_CLIENT_ID が未設定です', 500);
+
+  const storeRaw = await env.STORES.get(`store:${storeId}`);
+  if (!storeRaw) return jsonError(`Unknown store: ${storeId}`, 404);
+
+  // state トークン（storeId の代理。KV に10分保存）
+  const state = crypto.randomUUID();
+  await env.STORES.put(`gbp-oauth-state:${state}`, storeId, { expirationTtl: GBP_OAUTH_STATE_TTL });
+
+  const reqUrl = new URL(request.url);
+  const redirectUri = `${reqUrl.origin}/gbp/oauth/callback`;
+
+  const params = new URLSearchParams({
+    client_id: env.GBP_OAUTH_CLIENT_ID,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: GBP_OAUTH_SCOPES,
+    access_type: 'offline',
+    prompt: 'consent',
+    state,
+  });
+
+  const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+  return json({ ok: true, storeId, oauthUrl, expiresIn: GBP_OAUTH_STATE_TTL });
+}
+
+async function handleGbpOAuthCallback(url, env) {
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  const error = url.searchParams.get('error');
+
+  if (error) return htmlPage('GBP 認証エラー', `<p>Google 認証が拒否されました: <code>${error}</code></p>`, 400);
+  if (!code || !state) return htmlPage('GBP 認証エラー', '<p>code または state が不正です</p>', 400);
+
+  const storeId = await env.STORES.get(`gbp-oauth-state:${state}`);
+  if (!storeId) return htmlPage('GBP 認証エラー', '<p>state が期限切れまたは無効です（10分以内に再度 OAuth を開始してください）</p>', 400);
+
+  await env.STORES.delete(`gbp-oauth-state:${state}`);
+
+  if (!env.GBP_OAUTH_CLIENT_ID || !env.GBP_OAUTH_CLIENT_SECRET) {
+    return htmlPage('設定エラー', '<p>GBP_OAUTH_CLIENT_ID / CLIENT_SECRET が未設定です</p>', 500);
+  }
+
+  const redirectUri = `${url.origin}/gbp/oauth/callback`;
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: env.GBP_OAUTH_CLIENT_ID,
+      client_secret: env.GBP_OAUTH_CLIENT_SECRET,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code',
+    }),
+  });
+
+  const tokenData = await tokenRes.json();
+  if (!tokenRes.ok || !tokenData.refresh_token) {
+    const msg = tokenData.error_description ?? tokenData.error ?? JSON.stringify(tokenData).slice(0, 200);
+    return htmlPage('トークン取得エラー', `<p>${msg}</p><p>refresh_token が返されませんでした。Google Cloud Console で「offline アクセス」が有効か確認してください。</p>`, 500);
+  }
+
+  // refresh_token を store に保存
+  const storeRaw = await env.STORES.get(`store:${storeId}`);
+  if (!storeRaw) return htmlPage('エラー', `<p>store:${storeId} が見つかりません</p>`, 404);
+  const store = JSON.parse(storeRaw);
+  store.gbpRefreshToken = tokenData.refresh_token;
+  await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
+
+  return htmlPage(
+    'GBP 認証完了',
+    `<p>✅ Google ビジネスプロフィールの認証が完了しました。</p>
+     <p>店舗 ID: <code>${storeId}</code></p>
+     <p>次のステップ: <code>GET /admin/stores/${storeId}/gbp/locations</code> で店舗を選択してください。</p>`,
+    200,
+  );
+}
+
+async function handleGbpLocations(request, env, storeId) {
+  if (!checkAdminAuth(request, env)) return jsonError('Unauthorized', 401);
+
+  const storeRaw = await env.STORES.get(`store:${storeId}`);
+  if (!storeRaw) return jsonError(`Unknown store: ${storeId}`, 404);
+  const store = JSON.parse(storeRaw);
+  if (!store.gbpRefreshToken) return jsonError('GBP OAuth 未完了（/gbp/oauth/start から開始してください）', 400);
+
+  const { getGbpAccessToken, listGbpAccounts, listGbpLocations } = await import('../src/gbp.mjs');
+  const accessToken = await getGbpAccessToken({
+    clientId: env.GBP_OAUTH_CLIENT_ID,
+    clientSecret: env.GBP_OAUTH_CLIENT_SECRET,
+    refreshToken: store.gbpRefreshToken,
+  });
+
+  const accounts = await listGbpAccounts({ accessToken });
+  const locationsByAccount = await Promise.all(
+    accounts.map(async (account) => {
+      const locations = await listGbpLocations({ accessToken, accountId: account.name }).catch(() => []);
+      return { account: { name: account.name, accountName: account.accountName }, locations };
+    }),
+  );
+
+  return json({ ok: true, storeId, locationsByAccount });
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+// WhatsApp Token / Phone Number ID は Worker Secret なので
+// store KV に保存せず、sendDigest 呼び出し時に env から注入する。
+function withEnvCredentials(store, env) {
+  return {
+    ...store,
+    whatsappToken: env.WHATSAPP_TOKEN,
+    whatsappPhoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID,
+  };
+}
+
 async function handleAdminStatus_unused() {} // eslint dead code removal guard
 
 async function handleNotifyTest(request, env, storeId) {
@@ -616,7 +810,7 @@ async function handleNotifyTest(request, env, storeId) {
     draft: '[テスト返信] ご確認いただきありがとうございます。',
   };
 
-  const result = await sendDigest({ store, reviews: [testReview] });
+  const result = await sendDigest({ store: withEnvCredentials(store, env), reviews: [testReview] });
   return json({ ok: true, storeId, channel: store.notificationChannel ?? 'line', notify: result });
 }
 
@@ -636,6 +830,15 @@ function jsonError(message, status) {
 function withCors(response) {
   response.headers.set('Access-Control-Allow-Origin', '*');
   return response;
+}
+
+function htmlPage(title, bodyHtml, status = 200) {
+  return new Response(
+    `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>${title}</title>
+     <style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;line-height:1.6}</style>
+     </head><body><h1>${title}</h1>${bodyHtml}</body></html>`,
+    { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+  );
 }
 
 function corsPreflight() {

@@ -12,8 +12,15 @@ binding = "STORES"
 id = "8bcb74e16c5d4f46a440b20856e44de9"
 
 # ── Secrets（値は .dev.vars / Workers Secrets で供給） ────────────────────────
-# GROQ_API_KEY  : AI返信エンジン（Groq、無料枠）
-# ADMIN_KEY     : /admin/* 管理エンドポイントの認証キー
+# GROQ_API_KEY             : AI返信エンジン（Groq、無料枠）
+# ADMIN_KEY                : /admin/* 管理エンドポイントの認証キー
+# WHATSAPP_TOKEN           : Meta System User Token（Business Manager で発行）
+# WHATSAPP_PHONE_NUMBER_ID : WhatsApp 送信元電話番号 ID（テスト: 1222481350942430）
+# WHATSAPP_VERIFY_TOKEN    : WhatsApp Webhook 検証トークン（任意文字列）
+# GBP_OAUTH_CLIENT_ID      : Google Cloud Console OAuth クライアント ID
+# GBP_OAUTH_CLIENT_SECRET  : Google Cloud Console OAuth クライアントシークレット
+# LINE_CHANNEL_SECRET      : LINE Bot チャネルシークレット（Webhook 署名検証）
+# GMAIL_REFRESH_TOKEN      : Gmail OAuth refresh_token（GBP 承認前メール監視）
 
 [vars]
 VERSION = "0.1.0"

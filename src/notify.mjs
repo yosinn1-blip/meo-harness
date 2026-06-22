@@ -9,6 +9,7 @@
 
 import { sendLineDigest, buildDigestText } from './line-notify.mjs';
 import { buildFlexPayload } from './line-flex.mjs';
+import { sendWhatsAppDigest } from './whatsapp-notify.mjs';
 
 const LINE_PUSH_URL = 'https://api.line.me/v2/bot/message/push';
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
@@ -83,6 +84,33 @@ async function sendViaTelegram({ store, reviews, dryRun = false, fetchImpl }) {
   return { sent: 1, payload };
 }
 
+// ── WhatsApp ──────────────────────────────────────────────────────────────────
+// store には呼び出し元（worker/index.mjs）で env から注入した
+// whatsappToken / whatsappPhoneNumberId が含まれている前提。
+
+async function sendViaWhatsApp({ store, reviews, dryRun = false, fetchImpl }) {
+  const {
+    whatsappRecipient,
+    whatsappToken,
+    whatsappPhoneNumberId,
+    whatsappTemplateName,
+    whatsappTemplateLang,
+    businessName,
+  } = store;
+
+  return sendWhatsAppDigest({
+    phoneNumberId: whatsappPhoneNumberId,
+    token: whatsappToken,
+    to: whatsappRecipient,
+    bizName: businessName,
+    count: reviews.length,
+    templateName: whatsappTemplateName,
+    templateLang: whatsappTemplateLang,
+    dryRun,
+    fetchImpl,
+  });
+}
+
 // ── 公開インターフェース ────────────────────────────────────────────────────────
 
 export async function sendDigest({ store, reviews, dryRun = false, fetchImpl }) {
@@ -92,6 +120,7 @@ export async function sendDigest({ store, reviews, dryRun = false, fetchImpl }) 
 
   if (channel === 'line') return sendViaLine({ store, reviews, dryRun, fetchImpl });
   if (channel === 'telegram') return sendViaTelegram({ store, reviews, dryRun, fetchImpl });
+  if (channel === 'whatsapp') return sendViaWhatsApp({ store, reviews, dryRun, fetchImpl });
 
   throw new Error(`Unknown notification channel: ${channel}`);
 }

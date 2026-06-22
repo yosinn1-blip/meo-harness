@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getGbpAccessToken, fetchGbpReviews, normalizeGbpReview, postGbpReply } from '../src/gbp.mjs';
+import { getGbpAccessToken, fetchGbpReviews, normalizeGbpReview, postGbpReply, listGbpAccounts, listGbpLocations } from '../src/gbp.mjs';
 
 function mockFetch(status, body) {
   return async () => ({
@@ -119,4 +119,96 @@ test('postGbpReply: 404 → エラー', async () => {
     }),
     /GBP reply 投稿失敗 404/,
   );
+});
+
+test('postGbpReply: URL に v1 Reviews サブ API が含まれる', async () => {
+  let capturedUrl;
+  const spyFetch = async (url) => {
+    capturedUrl = url;
+    return { ok: true, status: 200, json: async () => ({}), text: async () => '{}' };
+  };
+  await postGbpReply({
+    accessToken: 'tok', accountId: 'accounts/1', locationId: 'locations/2',
+    reviewId: 'r1', comment: 'test', fetchImpl: spyFetch,
+  });
+  assert.ok(capturedUrl.includes('mybusinessreviews.googleapis.com/v1'), `URL should use v1 sub-API, got: ${capturedUrl}`);
+});
+
+// ── listGbpAccounts ───────────────────────────────────────────────────────────
+
+test('listGbpAccounts: 成功 → accounts 配列を返す', async () => {
+  const mockAccounts = [
+    { name: 'accounts/123', accountName: '山田カフェ', type: 'PERSONAL' },
+    { name: 'accounts/456', accountName: 'テスト書店', type: 'PERSONAL' },
+  ];
+  const result = await listGbpAccounts({
+    accessToken: 'tok',
+    fetchImpl: mockFetch(200, { accounts: mockAccounts }),
+  });
+  assert.equal(result.length, 2);
+  assert.equal(result[0].name, 'accounts/123');
+  assert.equal(result[0].accountName, '山田カフェ');
+});
+
+test('listGbpAccounts: accounts なし → 空配列', async () => {
+  const result = await listGbpAccounts({
+    accessToken: 'tok',
+    fetchImpl: mockFetch(200, {}),
+  });
+  assert.deepEqual(result, []);
+});
+
+test('listGbpAccounts: 401 → エラー', async () => {
+  await assert.rejects(
+    () => listGbpAccounts({
+      accessToken: 'bad',
+      fetchImpl: mockFetch(401, { error: { message: 'Unauthorized' } }),
+    }),
+    /GBP accounts 取得失敗 401/,
+  );
+});
+
+// ── listGbpLocations ──────────────────────────────────────────────────────────
+
+test('listGbpLocations: 成功 → locations 配列を返す', async () => {
+  const mockLocations = [
+    { name: 'accounts/123/locations/456', title: '山田カフェ 難波店', storeCode: 'NAMBA-01' },
+  ];
+  const result = await listGbpLocations({
+    accessToken: 'tok',
+    accountId: 'accounts/123',
+    fetchImpl: mockFetch(200, { locations: mockLocations }),
+  });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].title, '山田カフェ 難波店');
+  assert.equal(result[0].storeCode, 'NAMBA-01');
+});
+
+test('listGbpLocations: locations なし → 空配列', async () => {
+  const result = await listGbpLocations({
+    accessToken: 'tok', accountId: 'accounts/1',
+    fetchImpl: mockFetch(200, {}),
+  });
+  assert.deepEqual(result, []);
+});
+
+test('listGbpLocations: 403 → エラー', async () => {
+  await assert.rejects(
+    () => listGbpLocations({
+      accessToken: 'tok', accountId: 'accounts/1',
+      fetchImpl: mockFetch(403, { error: { message: 'PERMISSION_DENIED' } }),
+    }),
+    /GBP locations 取得失敗 403/,
+  );
+});
+
+test('listGbpLocations: URL に accountId と v1 が含まれる', async () => {
+  let capturedUrl;
+  const spyFetch = async (url) => {
+    capturedUrl = url;
+    return { ok: true, status: 200, json: async () => ({ locations: [] }), text: async () => '{}' };
+  };
+  await listGbpLocations({ accessToken: 'tok', accountId: 'accounts/99', fetchImpl: spyFetch });
+  assert.ok(capturedUrl.includes('mybusinessbusinessinformation.googleapis.com/v1'), `URL should use v1 sub-API, got: ${capturedUrl}`);
+  assert.ok(capturedUrl.includes('accounts/99'), `URL should include accountId, got: ${capturedUrl}`);
 });

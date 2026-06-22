@@ -105,9 +105,54 @@ test('sendDigest: 新着0件はスキップ（チャネル問わず）', async (
 });
 
 test('sendDigest: 未知のチャネルは例外を投げる', async () => {
-  const store = { ...lineStore, notificationChannel: 'whatsapp' };
+  const store = { ...lineStore, notificationChannel: 'sms' };
   await assert.rejects(
     sendDigest({ store, reviews: sampleReviews }),
-    /whatsapp|Unknown|未知/i,
+    /Unknown|未知/i,
   );
+});
+
+// ── WhatsApp ──────────────────────────────────────────────────────────────────
+
+const whatsappStore = {
+  notificationChannel: 'whatsapp',
+  whatsappRecipient: '819014479105',
+  whatsappToken: 'TOKEN_WA',
+  whatsappPhoneNumberId: '1222481350942430',
+  businessName: 'Test Store',
+};
+
+test('sendDigest: WhatsApp チャネルは Graph API に転送する', async () => {
+  let captured;
+  const mockFetch = async (url, init) => {
+    captured = { url, init };
+    return { ok: true, status: 200, json: async () => ({ messages: [{ id: 'wamid.x', message_status: 'accepted' }] }) };
+  };
+  const res = await sendDigest({ store: whatsappStore, reviews: sampleReviews, fetchImpl: mockFetch });
+  assert.equal(res.sent, 1);
+  assert.ok(captured.url.includes('graph.facebook.com'), `expected Graph API URL, got ${captured.url}`);
+  assert.match(captured.init.headers['Authorization'], /Bearer TOKEN_WA/);
+});
+
+test('sendDigest: WhatsApp ペイロードに件数が渡る', async () => {
+  let captured;
+  const mockFetch = async (url, init) => {
+    captured = { url, init };
+    return { ok: true, status: 200, json: async () => ({ messages: [{ id: 'id', message_status: 'accepted' }] }) };
+  };
+  const reviews = [sampleReviews[0], sampleReviews[0]];
+  await sendDigest({ store: whatsappStore, reviews, fetchImpl: mockFetch });
+  const body = JSON.parse(captured.init.body);
+  const bodyComp = body.template.components?.find(c => c.type === 'body');
+  assert.ok(bodyComp, 'body component should exist');
+  assert.equal(bodyComp.parameters[1].text, '2', 'count should be 2');
+});
+
+test('sendDigest: WhatsApp dryRun は fetch しない', async () => {
+  let called = false;
+  const mockFetch = async () => { called = true; };
+  const res = await sendDigest({ store: whatsappStore, reviews: sampleReviews, dryRun: true, fetchImpl: mockFetch });
+  assert.equal(called, false);
+  assert.equal(res.dryRun, true);
+  assert.equal(res.sent, 0);
 });
