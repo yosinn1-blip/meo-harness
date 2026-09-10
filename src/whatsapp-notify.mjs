@@ -1,5 +1,14 @@
 // MEO Harness — WhatsApp Business Cloud API 通知モジュール
 //
+// ⚠️ 休止中（2026-09-10 判断）: このチャネルは使っていない。
+//   - 既定チャネルは 'line'。WhatsApp は store.notificationChannel === 'whatsapp' の
+//     オプトインでのみ通り、現時点でそれを選んでいるストアは無い。
+//   - WABA は Meta にポリシー違反で制限されている（2026-06-22 と 2026-08-29 の2回、
+//     別々の WABA で発生）。本番番号は未登録で、実機配信は一度も成功していない。
+//   - 対象市場（日本の小規模店舗）は LINE。WhatsApp を復活させる予定は無い。
+//   コードは Telegram と同じくオプトイン実装として残すが、生きていると誤解しないこと。
+//   経緯: ObsidianVault/Decisions/2026-09-10-whatsapp-drop-line-only.md
+//
 // WhatsApp「24時間ルール」:
 //   相手からの最後のメッセージから24時間超 or 未会話 → template メッセージのみ送信可。
 //   店主への口コミ通知はアウトバウンドなので常に template を使う。
