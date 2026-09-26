@@ -84,3 +84,19 @@ CREATE INDEX jobs_due ON review_jobs(stage,next_attempt_at);
 CREATE INDEX session_expiry ON sessions(expires_at);
 CREATE INDEX audit_expiry ON audit_events(created_at);
 CREATE TABLE location_candidates(owner_sub TEXT NOT NULL,account_id TEXT NOT NULL,location_id TEXT NOT NULL,title TEXT NOT NULL,expires_at INTEGER NOT NULL,PRIMARY KEY(owner_sub,account_id,location_id));
+CREATE TRIGGER reservation_within_budget BEFORE INSERT ON usage_reservations
+WHEN NOT EXISTS(SELECT 1 FROM usage_reservations r WHERE r.id=NEW.id)
+ AND NOT EXISTS(SELECT 1 FROM usage_budgets b WHERE b.scope=NEW.scope
+ AND b.period=NEW.period AND b.kind=NEW.kind AND b.used+NEW.units<=b.cap)
+BEGIN SELECT RAISE(ABORT,'QUOTA_EXHAUSTED'); END;
+CREATE TRIGGER reservation_count AFTER INSERT ON usage_reservations
+BEGIN UPDATE usage_budgets SET used=used+NEW.units
+ WHERE scope=NEW.scope AND period=NEW.period AND kind=NEW.kind; END;
+CREATE TRIGGER reservation_same_identity BEFORE INSERT ON usage_reservations
+WHEN EXISTS(SELECT 1 FROM usage_reservations r WHERE r.id=NEW.id
+ AND (r.scope<>NEW.scope OR r.period<>NEW.period OR r.kind<>NEW.kind OR r.units<>NEW.units))
+BEGIN SELECT RAISE(ABORT,'RESERVATION_MISMATCH'); END;
+CREATE TRIGGER reservation_release AFTER UPDATE OF state ON usage_reservations
+WHEN NEW.state='released' AND OLD.state<>'released'
+BEGIN UPDATE usage_budgets SET used=MAX(0,used-NEW.units) WHERE scope=NEW.scope AND period=NEW.period AND kind=NEW.kind; END;
+CREATE TABLE mutation_guards(ok INTEGER NOT NULL CHECK(ok=1));

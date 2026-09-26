@@ -26,7 +26,7 @@ import {readFile} from 'node:fs/promises';
 import {claimLocation,findOwnedStore} from '../../worker/self-service/store-repository.mjs';
 export async function applySchema(db){
  const sql=await readFile(new URL('../../migrations/0001_self_service.sql',import.meta.url),'utf8');
- const statements=sql.match(/CREATE TRIGGER[\s\S]+?END;|[^;]+;/g)||[];
+ const statements=sql.match(/\s*CREATE TRIGGER[\s\S]+?END;|[^;]+;/g)||[];
  await db.batch(statements.map(s=>db.prepare(s.trim())));
 }
 export async function seedStore(ctx,{sub='alice',state='active',lineUserId='line-a'}={}){
