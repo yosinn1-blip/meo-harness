@@ -3,3 +3,8 @@ node_modules/
 .dev.vars
 zenn-launch-draft.md
 scripts/scout-cache/
+
+.superpowers/
+output/
+test-results/
+playwright-report/
