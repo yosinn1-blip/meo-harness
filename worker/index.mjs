@@ -92,6 +92,11 @@ export default {
           if (method === 'GET') return await handleGbpLocations(request, env, storeId);
         }
 
+        if (rest.endsWith('/line/link-code')) {
+          const storeId = rest.slice(0, -'/line/link-code'.length);
+          if (method === 'POST') return await handleLineLinkCode(request, env, storeId);
+        }
+
         if (rest.endsWith('/gbp/location')) {
           const storeId = rest.slice(0, -'/gbp/location'.length);
           if (method === 'PUT') return await handleGbpSelectLocation(request, env, storeId);
@@ -162,6 +167,8 @@ async function pollGbpStore(storeKey, env) {
 
   const { gbpRefreshToken, gbpAccountId, gbpLocationId } = store;
   if (!gbpRefreshToken || !gbpAccountId || !gbpLocationId) return;
+  // 通知先がまだ登録されていなければ取りに行かない（既読扱いにせず、登録後に届ける）
+  if ((store.notificationChannel ?? 'line') === 'line' && !store.lineUserId) return;
   if (!env.GBP_OAUTH_CLIENT_ID || !env.GBP_OAUTH_CLIENT_SECRET) return;
 
   const storeId = storeKey.slice('store:'.length);
@@ -381,12 +388,16 @@ async function handleLineBotWebhook(request, env, ctx) {
 }
 
 async function processLineEvents(events, env) {
+  const { parseLinkCode } = await import('../src/line-link.mjs');
   for (const event of events) {
-    if (event.type !== 'postback') continue;
     try {
-      await handleLinePostback(event, env);
+      if (event.type === 'postback') await handleLinePostback(event, env);
+      if (event.type === 'message' && event.message?.type === 'text') {
+        const code = parseLinkCode(event.message.text);
+        if (code) await handleLineLink(event, env, code);
+      }
     } catch (err) {
-      console.error('[line-postback] error:', err.message);
+      console.error(`[line-${event.type}] error:`, err.message);
     }
   }
 }
@@ -441,6 +452,47 @@ async function pushLineText(store, userId, text) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ to: userId, messages: [{ type: 'text', text }] }),
+  });
+}
+
+// 共有ボットを友だち追加したお店の人が登録コードを送ってきたら、その人を通知先にする
+async function handleLineLink(event, env, code) {
+  const userId = event.source?.userId;
+  const storeId = await env.STORES.get(`line-link:${code}`);
+  if (!storeId || !userId) {
+    await replyLineText(env, event.replyToken, '⚠️ 登録コードが見つからないか、有効期限（24時間）が切れています。発行した人に新しいコードをもらってください。');
+    return;
+  }
+  const storeRaw = await env.STORES.get(`store:${storeId}`);
+  if (!storeRaw) return;
+  const store = JSON.parse(storeRaw);
+  store.lineUserId = userId;
+  store.lineChannelToken = store.lineChannelToken ?? env.LINE_CHANNEL_ACCESS_TOKEN;
+  await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
+  await env.STORES.delete(`line-link:${code}`);
+  await replyLineText(env, event.replyToken,
+    `✅ 「${store.businessName ?? storeId}」の口コミ通知をこのLINEに届けます。\n新しい口コミが来たら、AIの返信案と「承認して送信」ボタンが届きます。`);
+}
+
+async function replyLineText(env, replyToken, text) {
+  if (!replyToken || !env.LINE_CHANNEL_ACCESS_TOKEN) return;
+  await fetch('https://api.line.me/v2/bot/message/reply', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ replyToken, messages: [{ type: 'text', text }] }),
+  });
+}
+
+async function handleLineLinkCode(request, env, storeId) {
+  if (!checkAdminAuth(request, env)) return jsonError('Unauthorized', 401);
+  if (!await env.STORES.get(`store:${storeId}`)) return jsonError(`Unknown store: ${storeId}`, 404);
+  const { makeLinkCode, LINE_LINK_TTL } = await import('../src/line-link.mjs');
+  const code = makeLinkCode();
+  await env.STORES.put(`line-link:${code}`, storeId, { expirationTtl: LINE_LINK_TTL });
+  return json({
+    ok: true, storeId, code, expiresIn: LINE_LINK_TTL,
+    howTo: 'LINEで「MEO Harness 通知」(@477byprh) を友だち追加し、このコードを送信してください',
+    addFriendUrl: 'https://line.me/R/ti/p/@477byprh',
   });
 }
 
@@ -606,8 +658,9 @@ async function handleAdminPut(request, env, storeId) {
 
   if (!apiKey) return jsonError('apiKey is required', 400);
   const channel = notificationChannel ?? 'line';
-  if (channel === 'line' && (!lineChannelToken || !lineUserId)) {
-    return jsonError('lineChannelToken and lineUserId are required for line channel', 400);
+  // LINE は共有ボット（env.LINE_CHANNEL_ACCESS_TOKEN）を既定にし、lineUserId は登録コードで後から埋められる
+  if (channel === 'line' && !lineChannelToken && !env.LINE_CHANNEL_ACCESS_TOKEN) {
+    return jsonError('lineChannelToken is required for line channel', 400);
   }
   if (channel === 'telegram' && (!telegramBotToken || !telegramChatId)) {
     return jsonError('telegramBotToken and telegramChatId are required for telegram channel', 400);
@@ -628,8 +681,8 @@ async function handleAdminPut(request, env, storeId) {
     ...(notifyMode ? { notifyMode } : {}),
     ...(webhookSecret ? { webhookSecret } : {}),
     ...(utcOffset !== undefined ? { utcOffset: Number(utcOffset) } : {}),
-    ...(lineChannelToken ? { lineChannelToken } : {}),
-    ...(lineUserId ? { lineUserId } : {}),
+    ...(channel === 'line' ? { lineChannelToken: lineChannelToken ?? prev.lineChannelToken ?? env.LINE_CHANNEL_ACCESS_TOKEN } : {}),
+    ...((lineUserId ?? prev.lineUserId) ? { lineUserId: lineUserId ?? prev.lineUserId } : {}),
     ...(telegramBotToken ? { telegramBotToken } : {}),
     ...(telegramChatId ? { telegramChatId } : {}),
     ...(whatsappRecipient ? { whatsappRecipient } : {}),
