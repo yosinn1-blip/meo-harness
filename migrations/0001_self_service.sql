@@ -83,3 +83,4 @@ CREATE TABLE rate_limits (
 CREATE INDEX jobs_due ON review_jobs(stage,next_attempt_at);
 CREATE INDEX session_expiry ON sessions(expires_at);
 CREATE INDEX audit_expiry ON audit_events(created_at);
+CREATE TABLE location_candidates(owner_sub TEXT NOT NULL,account_id TEXT NOT NULL,location_id TEXT NOT NULL,title TEXT NOT NULL,expires_at INTEGER NOT NULL,PRIMARY KEY(owner_sub,account_id,location_id));

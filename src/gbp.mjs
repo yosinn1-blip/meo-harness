@@ -174,3 +174,13 @@ export async function postGbpReply({ accessToken, accountId, locationId, reviewI
   }
   return { ok: true, reviewId };
 }
+
+// Paged variants preserve the legacy array-returning API.
+async function getPage(url,{accessToken,fetchImpl=fetch},key){
+ const r=await fetchImpl(url,{headers:{Authorization:`Bearer ${accessToken}`},signal:AbortSignal.timeout(15000)});
+ if(!r.ok)throw Object.assign(new Error('GBP_API_UNAVAILABLE'),{status:r.status});
+ const data=await r.json();return {items:data[key]??[],nextPageToken:data.nextPageToken??null};
+}
+export function listGbpAccountsPage({accessToken,pageToken,fetchImpl}){const u=new URL(`${GBP_ACCOUNTS_BASE}/accounts`);u.searchParams.set('pageSize','20');if(pageToken)u.searchParams.set('pageToken',pageToken);return getPage(u,{accessToken,fetchImpl},'accounts');}
+export function listGbpLocationsPage({accessToken,accountId,pageToken,fetchImpl}){const u=new URL(`${GBP_LOCATIONS_BASE}/${accountId}/locations`);u.searchParams.set('readMask','name,title');u.searchParams.set('pageSize','50');if(pageToken)u.searchParams.set('pageToken',pageToken);return getPage(u,{accessToken,fetchImpl},'locations');}
+export function fetchGbpReviewsPage({accessToken,accountId,locationId,pageToken,pageSize=50,fetchImpl}){const u=new URL(`${GBP_REVIEWS_BASE}/${accountId}/${locationId}/reviews`);u.searchParams.set('pageSize',String(Math.min(pageSize,50)));u.searchParams.set('orderBy','updateTime desc');if(pageToken)u.searchParams.set('pageToken',pageToken);return getPage(u,{accessToken,fetchImpl},'reviews');}
