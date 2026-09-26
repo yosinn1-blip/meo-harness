@@ -415,24 +415,28 @@ async function handleLinePostback(event, env) {
       clientSecret: env.GBP_OAUTH_CLIENT_SECRET,
       refreshToken: store.gbpRefreshToken,
     });
-    await postGbpReply({ accessToken, accountId: gbpAccountId, locationId: gbpLocationId, reviewId, comment: draft });
-
-    // LINE に完了通知を返す
     const userId = event.source?.userId;
-    if (userId && store.lineChannelToken) {
-      await fetch('https://api.line.me/v2/bot/message/push', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${store.lineChannelToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          to: userId,
-          messages: [{ type: 'text', text: '✅ Google に返信を投稿しました！' }],
-        }),
-      });
+    try {
+      await postGbpReply({ accessToken, accountId: gbpAccountId, locationId: gbpLocationId, reviewId, comment: draft });
+    } catch (err) {
+      // 押した人に何も返らないと、投稿されたと思い込むので失敗も LINE に返す
+      await pushLineText(store, userId, `❌ Google への返信投稿に失敗しました。\n${err.message.slice(0, 120)}`);
+      throw err;
     }
+    await pushLineText(store, userId, '✅ Google に返信を投稿しました！');
   }
+}
+
+async function pushLineText(store, userId, text) {
+  if (!userId || !store.lineChannelToken) return;
+  await fetch('https://api.line.me/v2/bot/message/push', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${store.lineChannelToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ to: userId, messages: [{ type: 'text', text }] }),
+  });
 }
 
 // ── /review ──────────────────────────────────────────────────────────────────
