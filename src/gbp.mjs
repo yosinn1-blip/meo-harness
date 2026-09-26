@@ -23,6 +23,11 @@ const GBP_ACCOUNTS_BASE = 'https://mybusinessaccountmanagement.googleapis.com/v1
 const GBP_LOCATIONS_BASE = 'https://mybusinessbusinessinformation.googleapis.com/v1';
 const GBP_STARS = { ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 };
 
+// GBP API で口コミを直接取得できる店舗か。取得できる店舗は Gmail 通知経由の処理を行わない（二重通知防止）。
+export function hasGbpApi(store) {
+  return Boolean(store?.gbpRefreshToken && store?.gbpAccountId && store?.gbpLocationId);
+}
+
 export async function getGbpAccessToken({ clientId, clientSecret, refreshToken, fetchImpl }) {
   const _fetch = fetchImpl ?? globalThis.fetch;
   const res = await _fetch(TOKEN_URL, {

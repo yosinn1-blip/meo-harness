@@ -194,6 +194,7 @@ async function pollGbpStore(storeKey, env) {
 
 async function pollGmailReviews(env) {
   const { fetchReviewNotificationEmails, parseGbpReviewEmail } = await import('../src/gmail-reviews.mjs');
+  const { hasGbpApi } = await import('../src/gbp.mjs');
 
   const lastRaw = await env.STORES.get('gmail-last:global');
   const lastDate = lastRaw
@@ -229,6 +230,8 @@ async function pollGmailReviews(env) {
     const match =
       stores.find((s) => s.store.businessName === parsed.businessName) ?? stores[0];
     if (!match) continue;
+    // GBP API で取得している店舗は pollGbpStore が処理する（同じ口コミの二重通知を防ぐ）
+    if (hasGbpApi(match.store)) continue;
 
     const review = {
       platform: 'gbp-mail',

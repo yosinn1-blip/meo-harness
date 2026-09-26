@@ -212,3 +212,12 @@ test('listGbpLocations: URL に accountId と v1 が含まれる', async () => {
   assert.ok(capturedUrl.includes('mybusinessbusinessinformation.googleapis.com/v1'), `URL should use v1 sub-API, got: ${capturedUrl}`);
   assert.ok(capturedUrl.includes('accounts/99'), `URL should include accountId, got: ${capturedUrl}`);
 });
+
+test('hasGbpApi: 3項目そろった店舗だけ true', async () => {
+  const { hasGbpApi } = await import('../src/gbp.mjs');
+  const full = { gbpRefreshToken: 'rt', gbpAccountId: 'accounts/1', gbpLocationId: 'locations/2' };
+  assert.equal(hasGbpApi(full), true);
+  assert.equal(hasGbpApi({ ...full, gbpAccountId: undefined }), false);
+  assert.equal(hasGbpApi({ gbpRefreshToken: 'rt' }), false);
+  assert.equal(hasGbpApi(undefined), false);
+});
