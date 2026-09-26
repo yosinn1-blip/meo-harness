@@ -22,3 +22,15 @@ export function fixtureEnv(db,overrides={}) {
     LINE_CHANNEL_ACCESS_TOKEN:'fixture-line',LINE_CHANNEL_SECRET:'fixture-line-secret',
     GROQ_API_KEY:'fixture-groq',...overrides};
 }
+import {readFile} from 'node:fs/promises';
+import {claimLocation,findOwnedStore} from '../../worker/self-service/store-repository.mjs';
+export async function applySchema(db){
+ const sql=await readFile(new URL('../../migrations/0001_self_service.sql',import.meta.url),'utf8');
+ const statements=sql.match(/CREATE TRIGGER[\s\S]+?END;|[^;]+;/g)||[];
+ await db.batch(statements.map(s=>db.prepare(s.trim())));
+}
+export async function seedStore(ctx,{sub='alice',state='active',lineUserId='line-a'}={}){
+ const store=await claimLocation(ctx,{sub,accountId:'accounts/1',locationId:'locations/2',title:'架空店'});
+ await ctx.db.prepare('UPDATE stores SET state=?,line_user_id=?,line_verified_at=? WHERE id=?').bind(state,lineUserId,ctx.now(),store.id).run();
+ return findOwnedStore(ctx,sub);
+}
