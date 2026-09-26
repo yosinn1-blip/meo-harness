@@ -28,6 +28,17 @@ export function hasGbpApi(store) {
   return Boolean(store?.gbpRefreshToken && store?.gbpAccountId && store?.gbpLocationId);
 }
 
+// アカウント横断で店舗がちょうど1つなら、その ID を返す（小規模店はほぼこれ。選ぶ手間を省く）。
+export function pickSingleLocation(locationsByAccount) {
+  const all = (locationsByAccount ?? []).flatMap(({ account, locations }) =>
+    (locations ?? []).map(loc => ({ gbpAccountId: account.name, gbpLocationId: loc.name, title: loc.title })));
+  return all.length === 1 ? all[0] : null;
+}
+
+export function isValidGbpIds({ gbpAccountId, gbpLocationId } = {}) {
+  return /^accounts\/\d+$/.test(gbpAccountId ?? '') && /^locations\/\d+$/.test(gbpLocationId ?? '');
+}
+
 export async function getGbpAccessToken({ clientId, clientSecret, refreshToken, fetchImpl }) {
   const _fetch = fetchImpl ?? globalThis.fetch;
   const res = await _fetch(TOKEN_URL, {

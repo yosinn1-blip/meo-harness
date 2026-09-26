@@ -221,3 +221,21 @@ test('hasGbpApi: 3項目そろった店舗だけ true', async () => {
   assert.equal(hasGbpApi({ gbpRefreshToken: 'rt' }), false);
   assert.equal(hasGbpApi(undefined), false);
 });
+
+test('pickSingleLocation: 店舗がちょうど1つのときだけ返す', async () => {
+  const { pickSingleLocation } = await import('../src/gbp.mjs');
+  const acc = (n, locs) => ({ account: { name: `accounts/${n}` }, locations: locs.map(l => ({ name: `locations/${l}`, title: `店${l}` })) });
+  assert.deepEqual(pickSingleLocation([acc(1, [9])]), { gbpAccountId: 'accounts/1', gbpLocationId: 'locations/9', title: '店9' });
+  assert.equal(pickSingleLocation([acc(1, [9, 8])]), null);
+  assert.equal(pickSingleLocation([acc(1, [9]), acc(2, [7])]), null);
+  assert.equal(pickSingleLocation([acc(1, [])]), null);
+  assert.equal(pickSingleLocation(undefined), null);
+});
+
+test('isValidGbpIds: accounts/数字 と locations/数字 だけ通す', async () => {
+  const { isValidGbpIds } = await import('../src/gbp.mjs');
+  assert.equal(isValidGbpIds({ gbpAccountId: 'accounts/1', gbpLocationId: 'locations/2' }), true);
+  assert.equal(isValidGbpIds({ gbpAccountId: 'accounts/1/../x', gbpLocationId: 'locations/2' }), false);
+  assert.equal(isValidGbpIds({ gbpAccountId: 'accounts/1' }), false);
+  assert.equal(isValidGbpIds(), false);
+});

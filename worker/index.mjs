@@ -92,6 +92,11 @@ export default {
           if (method === 'GET') return await handleGbpLocations(request, env, storeId);
         }
 
+        if (rest.endsWith('/gbp/location')) {
+          const storeId = rest.slice(0, -'/gbp/location'.length);
+          if (method === 'PUT') return await handleGbpSelectLocation(request, env, storeId);
+        }
+
         if (rest.endsWith('/status')) {
           const storeId = rest.slice(0, -'/status'.length);
           if (method === 'GET') return await handleAdminStatus(request, env, storeId);
@@ -611,8 +616,14 @@ async function handleAdminPut(request, env, storeId) {
     return jsonError('whatsappRecipient is required for whatsapp channel', 400);
   }
 
+  // GBP の認証と店舗選択は OAuth 側で保存される（管理者には値が見えない）ので、送られなければ引き継ぐ
+  const prevRaw = await env.STORES.get(`store:${storeId}`);
+  const prev = prevRaw ? JSON.parse(prevRaw) : {};
   const store = {
     apiKey, businessName, businessType, notificationChannel: channel,
+    ...(prev.gbpRefreshToken ? { gbpRefreshToken: prev.gbpRefreshToken } : {}),
+    ...(prev.gbpAccountId ? { gbpAccountId: prev.gbpAccountId } : {}),
+    ...(prev.gbpLocationId ? { gbpLocationId: prev.gbpLocationId } : {}),
     ...(timezone ? { timezone } : {}),
     ...(notifyMode ? { notifyMode } : {}),
     ...(webhookSecret ? { webhookSecret } : {}),
@@ -755,13 +766,27 @@ async function handleGbpOAuthCallback(url, env) {
   if (!storeRaw) return htmlPage('エラー', `<p>store:${storeId} が見つかりません</p>`, 404);
   const store = JSON.parse(storeRaw);
   store.gbpRefreshToken = tokenData.refresh_token;
+
+  // 店舗が1つだけなら自動で選ぶ。失敗しても認証自体は保存する（選択は後から /gbp/location でできる）
+  let picked = null;
+  try {
+    const locationsByAccount = await fetchLocationsByAccount(env, store.gbpRefreshToken);
+    const { pickSingleLocation } = await import('../src/gbp.mjs');
+    picked = pickSingleLocation(locationsByAccount);
+    if (picked) Object.assign(store, { gbpAccountId: picked.gbpAccountId, gbpLocationId: picked.gbpLocationId });
+  } catch (err) {
+    console.error(`[gbp/oauth] ${storeId}: 店舗の自動選択に失敗: ${err.message}`);
+  }
   await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
 
+  const next = picked
+    ? `<p>店舗「${escapeHtml(picked.title ?? picked.gbpLocationId)}」を自動で選びました。新しい口コミは1時間ごとに確認します。</p>`
+    : `<p>次のステップ: <code>GET /admin/stores/${storeId}/gbp/locations</code> で店舗を確認し、<code>PUT /admin/stores/${storeId}/gbp/location</code> で選択してください。</p>`;
   return htmlPage(
     'GBP 認証完了',
     `<p>✅ Google ビジネスプロフィールの認証が完了しました。</p>
      <p>店舗 ID: <code>${storeId}</code></p>
-     <p>次のステップ: <code>GET /admin/stores/${storeId}/gbp/locations</code> で店舗を選択してください。</p>`,
+     ${next}`,
     200,
   );
 }
@@ -774,22 +799,51 @@ async function handleGbpLocations(request, env, storeId) {
   const store = JSON.parse(storeRaw);
   if (!store.gbpRefreshToken) return jsonError('GBP OAuth 未完了（/gbp/oauth/start から開始してください）', 400);
 
+  const locationsByAccount = await fetchLocationsByAccount(env, store.gbpRefreshToken);
+  return json({ ok: true, storeId, locationsByAccount });
+}
+
+async function fetchLocationsByAccount(env, refreshToken) {
   const { getGbpAccessToken, listGbpAccounts, listGbpLocations } = await import('../src/gbp.mjs');
   const accessToken = await getGbpAccessToken({
     clientId: env.GBP_OAUTH_CLIENT_ID,
     clientSecret: env.GBP_OAUTH_CLIENT_SECRET,
-    refreshToken: store.gbpRefreshToken,
+    refreshToken,
   });
-
   const accounts = await listGbpAccounts({ accessToken });
-  const locationsByAccount = await Promise.all(
+  return Promise.all(
     accounts.map(async (account) => {
       const locations = await listGbpLocations({ accessToken, accountId: account.name }).catch(() => []);
       return { account: { name: account.name, accountName: account.accountName }, locations };
     }),
   );
+}
 
-  return json({ ok: true, storeId, locationsByAccount });
+// 店舗の選択だけを書き足す。PUT /admin/stores/:id は全体を上書きするので、
+// そちらで送ると管理者に見えない gbpRefreshToken が消えてしまう。
+async function handleGbpSelectLocation(request, env, storeId) {
+  if (!checkAdminAuth(request, env)) return jsonError('Unauthorized', 401);
+  let body;
+  try { body = await request.json(); } catch { return jsonError('Invalid JSON body', 400); }
+
+  const { isValidGbpIds } = await import('../src/gbp.mjs');
+  if (!isValidGbpIds(body)) return jsonError('gbpAccountId は accounts/数字、gbpLocationId は locations/数字 で指定してください', 400);
+
+  const storeRaw = await env.STORES.get(`store:${storeId}`);
+  if (!storeRaw) return jsonError(`Unknown store: ${storeId}`, 404);
+  const store = JSON.parse(storeRaw);
+  if (!store.gbpRefreshToken) return jsonError('GBP OAuth 未完了（/gbp/oauth/start から開始してください）', 400);
+
+  // このオーナーが実際に管理している店舗かを確かめる
+  const locationsByAccount = await fetchLocationsByAccount(env, store.gbpRefreshToken);
+  const owned = locationsByAccount.some(({ account, locations }) =>
+    account.name === body.gbpAccountId && locations.some(l => l.name === body.gbpLocationId));
+  if (!owned) return jsonError('その店舗はこの Google アカウントで管理されていません', 400);
+
+  store.gbpAccountId = body.gbpAccountId;
+  store.gbpLocationId = body.gbpLocationId;
+  await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
+  return json({ ok: true, storeId, gbpAccountId: store.gbpAccountId, gbpLocationId: store.gbpLocationId });
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -839,6 +893,10 @@ function jsonError(message, status) {
 function withCors(response) {
   response.headers.set('Access-Control-Allow-Origin', '*');
   return response;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function htmlPage(title, bodyHtml, status = 200) {
