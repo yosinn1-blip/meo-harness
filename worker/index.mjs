@@ -160,6 +160,8 @@ export default {
 
 // ── GBP ポーリング（Cron から呼び出し） ─────────────────────────────────────
 
+const GBP_FIRST_POLL_DAYS = 60;
+
 async function pollGbpStore(storeKey, env) {
   const storeRaw = await env.STORES.get(storeKey);
   if (!storeRaw) return;
@@ -184,7 +186,8 @@ async function pollGbpStore(storeKey, env) {
 
   // 返信済みを除外 + 前回ポーリング以降の新着のみ
   const lastRaw = await env.STORES.get(`gbp-last:${storeId}`);
-  const lastSeen = lastRaw ? new Date(lastRaw) : new Date(0);
+  // 初回は直近60日の未返信だけ届ける（何か月も前の口コミまで一度に流さない）
+  const lastSeen = lastRaw ? new Date(lastRaw) : new Date(Date.now() - GBP_FIRST_POLL_DAYS * 24 * 3600 * 1000);
 
   const newReviews = rawReviews
     .filter(r => !r.reviewReply)
@@ -889,9 +892,14 @@ async function handleGbpSelectLocation(request, env, storeId) {
   const storeRaw = await env.STORES.get(`store:${storeId}`);
   if (!storeRaw) return jsonError(`Unknown store: ${storeId}`, 404);
   const store = JSON.parse(storeRaw);
-  if (!store.gbpRefreshToken) return jsonError('GBP OAuth 未完了（/gbp/oauth/start から開始してください）', 400);
+  // お店が運営者の Google アカウントを「管理者」に招待した場合は、運営者の認証で扱う（お店側は OAuth 不要）
+  if (body.useOperatorToken) {
+    if (!env.GBP_REFRESH_TOKEN) return jsonError('運営者の GBP_REFRESH_TOKEN が未設定です', 500);
+    store.gbpRefreshToken = env.GBP_REFRESH_TOKEN;
+  }
+  if (!store.gbpRefreshToken) return jsonError('GBP OAuth 未完了（/gbp/oauth/start から開始するか、useOperatorToken を指定してください）', 400);
 
-  // このオーナーが実際に管理している店舗かを確かめる
+  // この認証で実際に管理している店舗かを確かめる（管理者招待の承認漏れもここで分かる）
   const locationsByAccount = await fetchLocationsByAccount(env, store.gbpRefreshToken);
   const owned = locationsByAccount.some(({ account, locations }) =>
     account.name === body.gbpAccountId && locations.some(l => l.name === body.gbpLocationId));

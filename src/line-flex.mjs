@@ -98,39 +98,59 @@ export function buildReviewBubble({ replyId, review, bizName }) {
   };
 }
 
+// LINE の上限: カルーセル1つに 10 バブル・約50KB、1回の push に 5 メッセージ。
+// 承認ボタンの無い「ほか N件」で口コミを取りこぼさないよう、上限の内側で複数通に分ける。
 const MAX_BUBBLES = 10;
+const MAX_MESSAGES = 5;
+const MAX_CAROUSEL_BYTES = 40_000;
+
+const byteLength = obj => new TextEncoder().encode(JSON.stringify(obj)).length;
+
+function restBubble(rest) {
+  return {
+    type: 'bubble',
+    size: 'kilo',
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      justifyContent: 'center',
+      contents: [{ type: 'text', text: `ほか ${rest}件`, size: 'md', align: 'center', color: '#aaaaaa' }],
+    },
+  };
+}
 
 export function buildFlexPayload({ to, reviews, bizName }) {
-  const shown = reviews.slice(0, MAX_BUBBLES);
-  const rest = reviews.length - shown.length;
-
-  const bubbles = shown.map(r => buildReviewBubble({ replyId: r.replyId, review: r, bizName }));
-
-  if (rest > 0) {
-    bubbles.push({
-      type: 'bubble',
-      size: 'kilo',
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        justifyContent: 'center',
-        contents: [{
-          type: 'text',
-          text: `ほか ${rest}件`,
-          size: 'md',
-          align: 'center',
-          color: '#aaaaaa',
-        }],
-      },
-    });
+  const carousels = [[]];
+  let size = 0;
+  let placed = 0;
+  for (const r of reviews) {
+    const bubble = buildReviewBubble({ replyId: r.replyId, review: r, bizName });
+    const b = byteLength(bubble);
+    let current = carousels[carousels.length - 1];
+    if (current.length >= MAX_BUBBLES || (current.length && size + b > MAX_CAROUSEL_BYTES)) {
+      if (carousels.length >= MAX_MESSAGES) break;
+      carousels.push(current = []);
+      size = 0;
+    }
+    current.push(bubble);
+    size += b;
+    placed++;
   }
 
+  let rest = reviews.length - placed;
+  if (rest > 0) {
+    const last = carousels[carousels.length - 1];
+    if (last.length >= MAX_BUBBLES) { last.pop(); rest++; }
+    last.push(restBubble(rest));
+  }
+
+  const label = `新着クチコミ ${reviews.length}件${bizName ? `（${bizName}）` : ''}`;
   return {
     to,
-    messages: [{
+    messages: carousels.map((bubbles, i) => ({
       type: 'flex',
-      altText: `新着クチコミ ${reviews.length}件${bizName ? `（${bizName}）` : ''}`,
+      altText: carousels.length > 1 ? `${label} ${i + 1}/${carousels.length}` : label,
       contents: { type: 'carousel', contents: bubbles },
-    }],
+    })),
   };
 }

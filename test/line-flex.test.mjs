@@ -68,11 +68,31 @@ test('buildFlexPayload: carousel に bubbles が含まれる', () => {
   assert.equal(carousel.contents.length, 3);
 });
 
-test('buildFlexPayload: 10件超は 10 + ほかN件 bubble', () => {
+test('buildFlexPayload: 10件超は複数通に分け、全件に承認ボタンを付ける', () => {
   const reviews = Array.from({ length: 13 }, (_, i) => ({ ...sampleReview, replyId: `r${i}` }));
   const payload = buildFlexPayload({ to: 'U123', reviews });
-  const bubbles = payload.messages[0].contents.contents;
-  assert.equal(bubbles.length, 11); // 10 + "ほか3件"
-  const lastBubble = bubbles[10];
-  assert.match(lastBubble.body.contents[0].text, /ほか 3件/);
+  assert.equal(payload.messages.length, 2);
+  assert.equal(payload.messages[0].contents.contents.length, 10);
+  assert.equal(payload.messages[1].contents.contents.length, 3);
+  assert.match(payload.messages[1].altText, /2\/2/);
+  const json = JSON.stringify(payload);
+  for (let i = 0; i < 13; i++) assert.ok(json.includes(`approve:r${i}`));
+});
+
+test('buildFlexPayload: 長い口コミでもカルーセル1つが容量上限を超えない', () => {
+  const reviews = Array.from({ length: 10 }, (_, i) => ({ star: 3, name: 'x', text: 'あ'.repeat(900), draft: 'い'.repeat(1400), replyId: `r${i}` }));
+  const payload = buildFlexPayload({ to: 'U123', reviews });
+  assert.ok(payload.messages.length > 1);
+  for (const m of payload.messages) assert.ok(new TextEncoder().encode(JSON.stringify(m.contents)).length <= 50_000);
+  const json = JSON.stringify(payload);
+  for (let i = 0; i < 10; i++) assert.ok(json.includes(`approve:r${i}`));
+});
+
+test('buildFlexPayload: 5通でも収まらない分は「ほか N件」にまとめる', () => {
+  const reviews = Array.from({ length: 53 }, (_, i) => ({ ...sampleReview, replyId: `r${i}` }));
+  const payload = buildFlexPayload({ to: 'U123', reviews });
+  assert.equal(payload.messages.length, 5);
+  const last = payload.messages[4].contents.contents;
+  assert.equal(last.length, 10);
+  assert.match(last[9].body.contents[0].text, /ほか 4件/);
 });
