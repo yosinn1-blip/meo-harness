@@ -277,6 +277,7 @@ async function processReviews(reviews, store, storeId, env) {
       : { ...reviews[i], draft: null, draftError: r.reason?.message }
   );
   const failed = processed.filter(r => r.draft == null).length;
+  processed.filter(r => r.draftError).forEach(r => console.error(`[draft] ${storeId}: ${r.draftError}`));
 
   // GBP 由来のレビューは reply:{uuid} エントリを作成してボタン付き Flex Message を送る
   const processedWithReplyIds = await Promise.all(
