@@ -375,20 +375,21 @@ async function handlePendingStore(pendingKey, env, utcHour) {
 // ── /webhook/line-bot（LINE Messaging API Webhook） ───────────────────────────
 
 async function handleLineBotWebhook(request, env, ctx) {
-  const body = await request.text();
+  if (!env.LINE_CHANNEL_SECRET) return jsonError('LINE signature unavailable', 401);
+  const { readText } = await import('./self-service/abuse.mjs');
+  let body;
+  try { body = await readText(request, 262144); }
+  catch { return jsonError('LINE body too large or invalid', 413); }
   const signature = request.headers.get('X-Line-Signature') ?? '';
-
-  if (env.LINE_CHANNEL_SECRET) {
-    const { verifyLineSignature } = await import('../src/hmac.mjs');
-    const valid = await verifyLineSignature(env.LINE_CHANNEL_SECRET, body, signature);
-    if (!valid) return jsonError('Invalid LINE signature', 401);
-  }
+  const { verifyLineSignature } = await import('../src/hmac.mjs');
+  if (!await verifyLineSignature(env.LINE_CHANNEL_SECRET, body, signature)) return jsonError('Invalid LINE signature', 401);
 
   let events;
   try { events = JSON.parse(body).events ?? []; }
   catch { return jsonError('Invalid JSON', 400); }
 
-  // LINE は 1 秒以内の 200 レスポンスを要求するため、処理を waitUntil に移す
+  if (!Array.isArray(events) || events.length > 100) return jsonError('Invalid events', 400);
+  // 処理を waitUntil に移し、イベントの重複は保存先で防ぐ
   ctx.waitUntil(processLineEvents(events, env));
   return json({ ok: true });
 }
@@ -419,6 +420,15 @@ async function handleLinePostback(event, env) {
 
   const replyRaw = await env.STORES.get(`reply:${replyId}`);
   if (!replyRaw) return;
+
+  const pendingReply = JSON.parse(replyRaw);
+  const registeredRaw = await env.STORES.get(`store:${pendingReply.storeId}`);
+  if (!registeredRaw) return;
+  const registered = JSON.parse(registeredRaw);
+  const { authorizeLineActor } = await import('./self-service/line-link.mjs');
+  if (!authorizeLineActor({source:event.source,registeredUserId:registered.lineUserId,
+    active:registered.state === undefined || registered.state === 'active'})) return;
+  if (pendingReply.gbpLocationId && registered.gbpLocationId !== pendingReply.gbpLocationId) return;
 
   if (action === 'skip') {
     await env.STORES.delete(`reply:${replyId}`);
