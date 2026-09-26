@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>MEO Harness | お店の口コミ返信を、いつものLINEで</title>
+    <link rel="stylesheet" href="/self/assets/style.css" />
+    <script src="/self/assets/app.js" defer></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand" href="/start">MEO <span>Harness</span></a
+      ><span class="trial">上限付き試用版</span>
+    </header>
+    <main class="layout">
+      <aside class="intro">
+        <h1>お店の声に、<br />あなたの言葉で。</h1>
+        <p>AIが返信案を用意。<br />最後のひと押しは、いつものLINEで。</p>
+        <ol id="steps" aria-label="設定の進み具合">
+          <li>Googleを接続</li>
+          <li>お店を選ぶ</li>
+          <li>LINEで確認</li>
+          <li>利用を開始</li>
+        </ol>
+        <p class="assurance">
+          承認するまで、口コミへの返信は<br />公開されません。
+        </p>
+      </aside>
+      <div class="workspace">
+        <p id="error" role="alert" hidden></p>
+        <section id="current-step" aria-live="polite">
+          <h2>設定を確認しています</h2>
+          <p>少しお待ちください。</p>
+        </section>
+        <div id="challenge"></div>
+        <section class="notes">
+          <h2>始める前に</h2>
+          <ul>
+            <li>Googleでお店を管理できる方が接続してください。</li>
+            <li>Googleのログインと権限確認は、ご本人が行います。</li>
+            <li>LINEの送信枠を使います。利用上限は開始前に表示します。</li>
+          </ul>
+          <details>
+            <summary>データの取り扱い・停止方法</summary>
+            <p>
+              Googleの認証情報は暗号化して保存します。口コミと返信案はGoogleから取得し、AIサービス（Groq）で下書きを生成、LINEへ通知します。未完了の接続情報は最終操作から24時間、本文は7日、操作記録は30日で削除します。
+            </p>
+            <p>
+              利用停止で新たな処理を止められます。切断すると認証情報と本文を削除します。すでにGoogleが受理した返信は削除されません。バックアップ保持期間を含む正式な案内を確認してから一般公開します。
+            </p>
+            <p>
+              自動課金や利用枠の追加購入は行いません。受付は運営者が確認した範囲だけで行います。
+            </p>
+          </details>
+        </section>
+        <footer>
+          <a href="/self/help/quickstart">使い方</a
+          ><a href="/self/help/ai-setup">AIに手伝ってもらう</a>
+        </footer>
+      </div>
+    </main>
+  </body>
+</html>

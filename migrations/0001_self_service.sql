@@ -57,7 +57,7 @@ CREATE TABLE replies (
 CREATE TABLE notification_jobs (
  id TEXT PRIMARY KEY, store_id TEXT NOT NULL, generation INTEGER NOT NULL,
  day_key TEXT NOT NULL, part INTEGER NOT NULL, retry_key TEXT NOT NULL UNIQUE,
- payload_ciphertext TEXT, state TEXT NOT NULL, first_attempt_at INTEGER,
+ payload_ciphertext TEXT, state TEXT NOT NULL, first_attempt_at INTEGER, expires_at INTEGER NOT NULL,
  accepted_request_id TEXT, lease_id TEXT, lease_until INTEGER,
  UNIQUE(store_id,day_key,part)
 );
@@ -101,3 +101,7 @@ WHEN NEW.state='released' AND OLD.state<>'released'
 BEGIN UPDATE usage_budgets SET used=MAX(0,used-NEW.units) WHERE scope=NEW.scope AND period=NEW.period AND kind=NEW.kind; END;
 CREATE TABLE mutation_guards(ok INTEGER NOT NULL CHECK(ok=1));
 CREATE TABLE line_events(event_id TEXT PRIMARY KEY,created_at INTEGER NOT NULL);
+
+CREATE TRIGGER reservation_not_released BEFORE INSERT ON usage_reservations
+WHEN EXISTS(SELECT 1 FROM usage_reservations r WHERE r.id=NEW.id AND r.state='released')
+BEGIN SELECT RAISE(ABORT,'RESERVATION_RELEASED'); END;

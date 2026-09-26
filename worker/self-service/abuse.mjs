@@ -1,8 +1,100 @@
-import {LIMITS,dateKeys} from './contracts.mjs';
-import {ensure,SelfError} from './errors.mjs';
-import {hmac} from './crypto.mjs';
-export async function readText(request,max=LIMITS.requestBytes){if(!request.body)return '';const reader=request.body.getReader();let size=0,parts=[];try{while(true){const {value,done}=await reader.read();if(done)break;size+=value.byteLength;if(size>max){await reader.cancel();throw new SelfError('BODY_TOO_LARGE',413);}parts.push(value);}const bytes=new Uint8Array(size);let offset=0;for(const part of parts){bytes.set(part,offset);offset+=part.byteLength;}return new TextDecoder('utf-8',{fatal:true}).decode(bytes);}finally{reader.releaseLock();}}
-export async function readBody(request){try{const data=JSON.parse(await readText(request));ensure(data&&typeof data==='object'&&!Array.isArray(data),'INVALID_JSON');return data;}catch(e){if(e instanceof SelfError)throw e;throw new SelfError('INVALID_JSON');}}
-export async function consumeRate(ctx,{bucket,limit,windowMs}){ensure(Number.isSafeInteger(limit)&&limit>0,'RATE_LIMITED',429);const n=ctx.now();const row=await ctx.db.prepare(`INSERT INTO rate_limits(bucket,used,expires_at) VALUES (?,1,?) ON CONFLICT(bucket) DO UPDATE SET used=CASE WHEN expires_at<=? THEN 1 ELSE used+1 END,expires_at=CASE WHEN expires_at<=? THEN ? ELSE expires_at END WHERE expires_at<=? OR used<? RETURNING used`).bind(bucket,n+windowMs,n,n,n+windowMs,n,limit).first();ensure(row,'RATE_LIMITED',429);return row.used;}
-export async function ipBucket(ctx,ip){ensure(ctx.env.SELF_RATE_KEY,'REGISTRATION_CLOSED',503);return hmac(dateKeys(ctx.now()).day+':'+ip,ctx.env.SELF_RATE_KEY);}
-export async function verifyChallenge(ctx,{token,ip,action='self_start'}){ensure(ctx.env.TURNSTILE_SECRET_KEY&&ctx.env.SELF_PUBLIC_ORIGIN,'REGISTRATION_CLOSED',503);ensure(typeof token==='string'&&token.length>0&&token.length<=2048,'CHALLENGE_FAILED',403);let r,data;try{r=await ctx.fetchImpl('https://challenges.cloudflare.com/turnstile/v0/siteverify',{method:'POST',body:new URLSearchParams({secret:ctx.env.TURNSTILE_SECRET_KEY,response:token,...(ip?{remoteip:ip}:{})}),signal:AbortSignal.timeout(10000)});data=await r.json();}catch{throw new SelfError('CHALLENGE_FAILED',403);}ensure(r.ok&&data.success===true&&data.hostname===new URL(ctx.env.SELF_PUBLIC_ORIGIN).hostname&&data.action===action,'CHALLENGE_FAILED',403);}
+import { LIMITS, dateKeys } from "./contracts.mjs";
+import { ensure, SelfError } from "./errors.mjs";
+import { hmac } from "./crypto.mjs";
+export async function readText(request, max = LIMITS.requestBytes) {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  let size = 0,
+    parts = [];
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) {
+        await reader.cancel();
+        throw new SelfError("BODY_TOO_LARGE", 413);
+      }
+      parts.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const part of parts) {
+      bytes.set(part, offset);
+      offset += part.byteLength;
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } finally {
+    reader.releaseLock();
+  }
+}
+export async function readBody(request) {
+  try {
+    const data = JSON.parse(await readText(request));
+    ensure(
+      data && typeof data === "object" && !Array.isArray(data),
+      "INVALID_JSON",
+    );
+    return data;
+  } catch (e) {
+    if (e instanceof SelfError) throw e;
+    throw new SelfError("INVALID_JSON");
+  }
+}
+export async function consumeRate(ctx, { bucket, limit, windowMs }) {
+  ensure(Number.isSafeInteger(limit) && limit > 0, "RATE_LIMITED", 429);
+  const n = ctx.now();
+  const row = await ctx.db
+    .prepare(
+      `INSERT INTO rate_limits(bucket,used,expires_at) VALUES (?,1,?) ON CONFLICT(bucket) DO UPDATE SET used=CASE WHEN expires_at<=? THEN 1 ELSE used+1 END,expires_at=CASE WHEN expires_at<=? THEN ? ELSE expires_at END WHERE expires_at<=? OR used<? RETURNING used`,
+    )
+    .bind(bucket, n + windowMs, n, n, n + windowMs, n, limit)
+    .first();
+  ensure(row, "RATE_LIMITED", 429);
+  return row.used;
+}
+export async function ipBucket(ctx, ip) {
+  ensure(ctx.env.SELF_RATE_KEY, "REGISTRATION_CLOSED", 503);
+  return hmac(dateKeys(ctx.now()).day + ":" + ip, ctx.env.SELF_RATE_KEY);
+}
+export async function verifyChallenge(
+  ctx,
+  { token, ip, action = "self_start" },
+) {
+  ensure(
+    ctx.env.TURNSTILE_SECRET_KEY && ctx.env.SELF_PUBLIC_ORIGIN,
+    "REGISTRATION_CLOSED",
+    503,
+  );
+  ensure(
+    typeof token === "string" && token.length > 0 && token.length <= 2048,
+    "CHALLENGE_FAILED",
+    403,
+  );
+  let r, data;
+  try {
+    r = await ctx.fetchImpl(
+      "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+      {
+        method: "POST",
+        body: new URLSearchParams({
+          secret: ctx.env.TURNSTILE_SECRET_KEY,
+          response: token,
+          ...(ip ? { remoteip: ip } : {}),
+        }),
+        signal: AbortSignal.timeout(10000),
+      },
+    );
+    data = await r.json();
+  } catch {
+    throw new SelfError("CHALLENGE_FAILED", 403);
+  }
+  ensure(
+    r.ok &&
+      data.success === true &&
+      data.hostname === new URL(ctx.env.SELF_PUBLIC_ORIGIN).hostname &&
+      data.action === action,
+    "CHALLENGE_FAILED",
+    403,
+  );
+}

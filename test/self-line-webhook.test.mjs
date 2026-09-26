@@ -1,8 +1,79 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';import worker from '../worker/index.mjs';import {hmac} from '../worker/self-service/crypto.mjs';import {authorizeLineActor} from '../worker/self-service/line-link.mjs';
-test('wrong LINE owner, group and inactive stores are refused for both actions',()=>{for(const source of [{type:'user',userId:'bob'},{type:'group',userId:'alice'},{}])assert.equal(authorizeLineActor({source,registeredUserId:'alice',active:true}),false);assert.equal(authorizeLineActor({source:{type:'user',userId:'alice'},registeredUserId:'alice',active:false}),false);});
-test('LINE webhook fails closed when signature secret missing',async()=>{const r=await worker.fetch(new Request('https://meo.test/webhook/line-bot',{method:'POST',body:'{"events":[]}'}),{}, {waitUntil(){}});assert.equal(r.status,401);});
-test('forged legacy skip does not delete pending reply; legit owner can skip',async()=>{
- const values=new Map([['reply:r',JSON.stringify({storeId:'s'})],['store:s',JSON.stringify({lineUserId:'alice'})]]);const pending=[];const env={LINE_CHANNEL_SECRET:'fixture',STORES:{get:async k=>values.get(k),delete:async k=>values.delete(k)}};
- async function send(userId){const body=JSON.stringify({events:[{type:'postback',source:{type:'user',userId},postback:{data:'skip:r'}}]});const r=await worker.fetch(new Request('https://meo.test/webhook/line-bot',{method:'POST',body,headers:{'X-Line-Signature':await hmac(body,'fixture')}}),env,{waitUntil(p){pending.push(p);}});assert.equal(r.status,200);await Promise.all(pending);}
- await send('mallory');assert.ok(values.has('reply:r'));await send('alice');assert.equal(values.has('reply:r'),false);
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import worker from "../worker/index.mjs";
+import { hmac } from "../worker/self-service/crypto.mjs";
+import { authorizeLineActor } from "../worker/self-service/line-link.mjs";
+test("wrong LINE owner, group and inactive stores are refused for both actions", () => {
+  for (const source of [
+    { type: "user", userId: "bob" },
+    { type: "group", userId: "alice" },
+    {},
+  ])
+    assert.equal(
+      authorizeLineActor({ source, registeredUserId: "alice", active: true }),
+      false,
+    );
+  assert.equal(
+    authorizeLineActor({
+      source: { type: "user", userId: "alice" },
+      registeredUserId: "alice",
+      active: false,
+    }),
+    false,
+  );
+});
+test("LINE webhook fails closed when signature secret missing", async () => {
+  const r = await worker.fetch(
+    new Request("https://meo.test/webhook/line-bot", {
+      method: "POST",
+      body: '{"events":[]}',
+    }),
+    {},
+    { waitUntil() {} },
+  );
+  assert.equal(r.status, 401);
+});
+test("forged legacy skip does not delete pending reply; legit owner can skip", async () => {
+  const values = new Map([
+    ["reply:r", JSON.stringify({ storeId: "s" })],
+    ["store:s", JSON.stringify({ lineUserId: "alice" })],
+  ]);
+  const pending = [];
+  const env = {
+    LINE_CHANNEL_SECRET: "fixture",
+    STORES: {
+      get: async (k) => values.get(k),
+      delete: async (k) => values.delete(k),
+    },
+  };
+  async function send(userId) {
+    const body = JSON.stringify({
+      events: [
+        {
+          type: "postback",
+          source: { type: "user", userId },
+          postback: { data: "skip:r" },
+        },
+      ],
+    });
+    const r = await worker.fetch(
+      new Request("https://meo.test/webhook/line-bot", {
+        method: "POST",
+        body,
+        headers: { "X-Line-Signature": await hmac(body, "fixture") },
+      }),
+      env,
+      {
+        waitUntil(p) {
+          pending.push(p);
+        },
+      },
+    );
+    assert.equal(r.status, 200);
+    await Promise.all(pending);
+  }
+  await send("mallory");
+  assert.ok(values.has("reply:r"));
+  await send("alice");
+  assert.equal(values.has("reply:r"), false);
 });

@@ -24,8 +24,15 @@ id = "8bcb74e16c5d4f46a440b20856e44de9"
 
 [vars]
 VERSION = "0.1.0"
+SELF_REGISTRATION_ENABLED = "false"
+SELF_PROCESSING_ENABLED = "false"
 
 # ── Cron Trigger: タイムゾーン対応ダイジェスト（毎時実行・各店舗の現地9:00に送信）──
 # utcOffset=+9(JST/KST)→UTC 0:00, utcOffset=+1(BST)→UTC 8:00, utcOffset=-5(EST)→UTC 14:00
 [triggers]
 crons = ["0 * * * *"]
+
+[[rules]]
+type = "Text"
+globs = ["**/*.html", "**/*.css", "**/*.txt", "**/*.md"]
+fallthrough = true

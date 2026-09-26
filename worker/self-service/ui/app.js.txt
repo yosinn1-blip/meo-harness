@@ -1,0 +1,446 @@
+const root = document.querySelector("#current-step"),
+  errorBox = document.querySelector("#error");
+let state = null,
+  lineCode = null,
+  nextCursor = null,
+  challengeToken = "",
+  rendered = "",
+  busy = false;
+const messages = {
+  LOGIN_REQUIRED:
+    "ログインの有効期限が切れました。Googleで再ログインしてください。",
+  REGISTRATION_CLOSED:
+    "現在、新規受付を停止しています。すでに利用中の方はGoogleでログインできます。",
+  CAPACITY_UNAVAILABLE:
+    "現在の受付枠がいっぱいです。時間をおいて再度確認してください。",
+  CHALLENGE_FAILED: "本人確認をもう一度行ってから接続してください。",
+  PIN_INVALID:
+    "確認番号が違うか、有効期限が切れています。新しい番号を送って確認してください。",
+  LINE_BROWSER_MISMATCH:
+    "この画面で登録コードを再発行して、LINEから送り直してください。",
+  LINE_PENDING_REQUIRED: "先にLINEへ登録コードを送ってください。",
+  RATE_LIMITED: "操作回数の上限に達しました。少し待ってからお試しください。",
+  QUOTA_EXHAUSTED: "利用枠が足りないため保留しました。追加課金は行いません。",
+  LOCATION_NOT_ACCESSIBLE:
+    "このGoogleアカウントでお店を管理できるか確認してください。",
+  LOCATION_UNAVAILABLE:
+    "この店舗は登録できません。別の店舗を選ぶか、運営者にご確認ください。",
+  GOOGLE_RECONNECT_REQUIRED:
+    "Googleとの接続が切れました。もう一度接続してください。",
+  GOOGLE_PERMISSION_DENIED:
+    "Googleの権限が許可されませんでした。内容を確認してやり直してください。",
+  OAUTH_STATE_INVALID:
+    "接続の有効期限が切れました。この画面からやり直してください。",
+  GOOGLE_ACCOUNT_MISMATCH:
+    "接続済みのお店と同じGoogleアカウントを選んでください。",
+  LINE_RESULT_UNKNOWN:
+    "LINEへの送信結果を確認できません。届いている番号は入力できます。再送は少し待ってから行ってください。",
+  NOT_FOUND:
+    "表示できる本文がありません。有効期限やログイン中のアカウントを確認してください。",
+};
+function node(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text !== undefined) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+function showError(error) {
+  errorBox.hidden = false;
+  errorBox.textContent =
+    messages[error.code] ??
+    "処理を完了できませんでした。状態を更新してやり直してください。";
+  errorBox.tabIndex = -1;
+  errorBox.focus();
+}
+async function api(path, body) {
+  const response = await fetch("/api/self/" + path, {
+    method: body === undefined ? "GET" : "POST",
+    headers:
+      body === undefined
+        ? {}
+        : {
+            "Content-Type": "application/json",
+            "X-CSRF-Token": state?.csrf ?? "",
+          },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    credentials: "same-origin",
+  });
+  const data = await response.json();
+  if (!response.ok || !data.ok) throw data;
+  return data;
+}
+function button(text, action, cls = "") {
+  const b = node("button", text, cls);
+  b.type = "button";
+  b.disabled = busy;
+  b.onclick = async () => {
+    if (busy) return;
+    busy = true;
+    document.querySelectorAll("button").forEach((x) => (x.disabled = true));
+    errorBox.hidden = true;
+    try {
+      await action();
+    } catch (e) {
+      showError(e);
+    } finally {
+      busy = false;
+      document
+        .querySelectorAll("button")
+        .forEach(
+          (x) => (x.disabled = Boolean(x.dataset.oauth && !challengeToken)),
+        );
+    }
+  };
+  return b;
+}
+function text(t, cls) {
+  root.append(node("p", t, cls));
+}
+function heading(t) {
+  root.append(node("h2", t));
+}
+function link(label, url) {
+  const a = node("a", label, "button");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  return a;
+}
+async function loadChallenge() {
+  if (!state.turnstileSiteKey || challengeToken) return;
+  const target = document.querySelector("#challenge");
+  if (target.dataset.loaded) return;
+  target.dataset.loaded = "true";
+  const render = () =>
+    window.turnstile.render(target, {
+      sitekey: state.turnstileSiteKey,
+      action: "self_start",
+      callback: (t) => {
+        challengeToken = t;
+        document
+          .querySelectorAll("[data-oauth]")
+          .forEach((b) => (b.disabled = false));
+      },
+      "expired-callback": () => {
+        challengeToken = "";
+      },
+    });
+  if (window.turnstile) return render();
+  const script = document.createElement("script");
+  script.src =
+    "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+  script.onload = render;
+  script.onerror = () => showError({ code: "CHALLENGE_FAILED" });
+  document.head.append(script);
+}
+function oauthButton(label, intent, cls = "") {
+  const b = button(label, () => google(intent), cls);
+  b.dataset.oauth = "true";
+  b.disabled = !challengeToken;
+  return b;
+}
+async function google(intent) {
+  if (!challengeToken) throw { code: "CHALLENGE_FAILED" };
+  const r = await api("google/start", { intent, challenge: challengeToken });
+  location.assign(r.authorizationUrl);
+}
+async function refresh(force = false) {
+  state = await api("status");
+  const fingerprint = JSON.stringify(state) + lineCode;
+  if (!force && fingerprint === rendered) return;
+  rendered = fingerprint;
+  await render();
+}
+async function mutate(path, body = {}) {
+  await api(path, body);
+  await refresh(true);
+}
+async function code() {
+  lineCode = (await api("line/code", {})).code;
+  await refresh(true);
+}
+function progress() {
+  const i =
+    {
+      anonymous: 0,
+      needs_google_reconnect: 0,
+      google_connected: 1,
+      location_selected: 2,
+      line_pending: 2,
+      line_verified: 3,
+      ready: 3,
+      active: 3,
+      paused: 3,
+    }[state.state] ?? 0;
+  document
+    .querySelectorAll("#steps li")
+    .forEach((e, n) =>
+      n === i
+        ? e.setAttribute("aria-current", "step")
+        : e.removeAttribute("aria-current"),
+    );
+}
+async function locations(cursor = null) {
+  const result = await api(
+    "locations" + (cursor ? "?cursor=" + encodeURIComponent(cursor) : ""),
+  );
+  const list = document.querySelector("#locations");
+  for (const loc of result.locations) {
+    const box = node("div", undefined, "location");
+    box.append(
+      node("h3", loc.title),
+      button("この店舗を使う", async () => {
+        await api("location", {
+          accountId: loc.accountId,
+          locationId: loc.locationId,
+        });
+        await code();
+      }),
+    );
+    list.append(box);
+  }
+  nextCursor = result.nextCursor;
+  if (result.partial)
+    list.append(
+      node(
+        "p",
+        "一部の店舗を取得できませんでした。Googleの管理権限を確認してください。",
+        "small",
+      ),
+    );
+  if (!result.locations.length && !cursor)
+    list.append(
+      node(
+        "p",
+        "管理できる店舗が見つかりませんでした。お店を管理しているGoogleアカウントかご確認ください。",
+      ),
+    );
+  document.querySelector("#more")?.remove();
+  if (nextCursor) {
+    const b = button(
+      "ほかの店舗を表示",
+      () => locations(nextCursor),
+      "secondary",
+    );
+    b.id = "more";
+    list.append(b);
+  }
+}
+function dangerConfirm(kind) {
+  root.replaceChildren();
+  heading(
+    kind === "pause"
+      ? "利用を停止しますか？"
+      : "Googleとの接続を切断しますか？",
+  );
+  text(
+    kind === "pause"
+      ? "新たな口コミの取得・生成・通知・投稿を止めます。すでにGoogleが受理した返信は取り消せません。"
+      : "認証情報と口コミ・返信案を削除します。Google上の公開済み返信は残ります。",
+  );
+  root.append(
+    button(
+      kind === "pause" ? "停止する" : "切断してデータを削除",
+      async () => {
+        await api(kind, { confirmed: true });
+        lineCode = null;
+        await refresh(true);
+      },
+      "danger",
+    ),
+    button("戻る", () => render(), "secondary"),
+  );
+}
+async function render() {
+  progress();
+  root.replaceChildren();
+  document.querySelector("#challenge").hidden = ![
+    "anonymous",
+    "needs_google_reconnect",
+  ].includes(state.state);
+  const replyPath = /^\/account\/replies\/(ss_[\w-]+)$/.exec(location.pathname);
+  if (replyPath && state.state !== "anonymous") {
+    const r = await api("replies/" + replyPath[1]);
+    heading("口コミと返信案の全文");
+    root.append(
+      node("h3", "口コミ"),
+      node("div", r.reviewText, "review-full"),
+      node("h3", "返信案"),
+      node("div", r.draftText, "review-full"),
+    );
+    text("内容を確認したら、LINEの承認ボタンから投稿してください。");
+    return;
+  }
+  if (state.state === "anonymous") {
+    heading(
+      state.registrationOpen ? "Googleでお店を接続" : "新規受付はお休み中です",
+    );
+    text(
+      "Googleアカウントのパスワードを、この画面やAIのチャットに入力する必要はありません。",
+    );
+    if (state.registrationOpen)
+      root.append(oauthButton("Googleで接続", "connect"));
+    root.append(oauthButton("Googleでログイン", "login", "secondary"));
+    await loadChallenge();
+  } else if (state.state === "needs_google_reconnect") {
+    heading("Googleをもう一度接続");
+    text("お店を管理している、同じGoogleアカウントで接続してください。");
+    root.append(
+      oauthButton("Googleで再接続", state.store ? "reconnect" : "connect"),
+    );
+    await loadChallenge();
+  } else if (state.state === "google_connected") {
+    heading("あなたのお店を選んでください");
+    text("このGoogleアカウントで管理できる店舗だけを表示します。");
+    const list = node("div");
+    list.id = "locations";
+    root.append(list);
+    await locations();
+  } else if (["location_selected", "line_pending"].includes(state.state)) {
+    heading("いつものLINEを通知先に");
+    text(state.store.title);
+    if (lineCode) {
+      root.append(link("LINEで友だち追加", state.lineFriendUrl));
+      const qr = node("img", undefined, "qr");
+      qr.src = "/self/assets/line-qr.svg";
+      qr.alt = "LINE友だち追加のQRコード";
+      root.append(qr);
+      const c = node("output", lineCode, "code");
+      c.dataset.testid = "line-code";
+      root.append(
+        c,
+        button(
+          "登録コードをコピー",
+          () => navigator.clipboard.writeText(lineCode),
+          "secondary",
+        ),
+      );
+      text(
+        "このコードをLINEボットへ送ってください。有効期限は15分です。",
+        "small",
+      );
+    } else {
+      root.append(button("LINEの登録コードを表示", code));
+    }
+    root.append(button("コードを再発行", code, "secondary"));
+    if (state.lineDetected) {
+      text("LINEを検出しました。届いた番号で通知先を確認します。", "success");
+      root.append(button("確認番号をLINEに送る", () => mutate("line/test")));
+      const label = node("label", "確認番号");
+      label.htmlFor = "pin";
+      const pin = node("input");
+      pin.id = "pin";
+      pin.type = "text";
+      pin.inputMode = "numeric";
+      pin.autocomplete = "one-time-code";
+      pin.maxLength = 6;
+      root.append(
+        label,
+        pin,
+        button("確認する", () => mutate("line/verify", { pin: pin.value })),
+      );
+      text("番号は5分間有効です。テスト送信は1分に1回、1日3回まで。", "small");
+    } else
+      root.append(
+        button("LINEの検出状態を更新", () => refresh(true), "secondary"),
+      );
+  } else if (["line_verified", "ready"].includes(state.state)) {
+    heading("準備ができました");
+    text(state.store.title + " ／ LINE確認済み");
+    text(
+      "直近60日の未返信口コミから、最初は5件まで返信案を作ります。通知は原則1日1回。ここで利用開始しても、返信はまだ公開されません。",
+    );
+    for (const [name, value] of [
+      ["月間AI下書き数", state.limits.drafts],
+      ["共有LINEの月間送信上限", state.limits.pushes],
+    ]) {
+      const p = node("div", undefined, "capacity");
+      p.append(node("span", name), node("strong", value + "件"));
+      root.append(p);
+    }
+    const label = node("label");
+    const checkbox = node("input");
+    checkbox.type = "checkbox";
+    checkbox.id = "terms";
+    label.append(checkbox, document.createTextNode("利用条件を確認しました"));
+    root.append(
+      label,
+      button("利用を開始する", async () => {
+        if (!checkbox.checked) {
+          checkbox.focus();
+          return;
+        }
+        await mutate("activate", {
+          termsVersion: state.termsVersion,
+          confirmed: true,
+        });
+      }),
+    );
+  } else if (["active", "paused"].includes(state.state)) {
+    heading(state.state === "active" ? "稼働中" : "停止中");
+    text(state.store.title);
+    text(
+      state.lastCheckedAt
+        ? "最終確認: " + new Date(state.lastCheckedAt).toLocaleString("ja-JP")
+        : "接続は完了しました。次回の定期確認を待っています。",
+    );
+    text(
+      state.processingCount
+        ? "処理待ちの口コミ: " +
+            state.processingCount +
+            "件。利用枠や接続の確認後に順次処理します。"
+        : state.scanIncomplete
+          ? "口コミ一覧を引き続き取得しています。"
+          : state.pendingCount
+            ? "承認待ちの返信案: " +
+              state.pendingCount +
+              "件。LINEで内容を確認してください。"
+            : state.lastCheckedAt
+              ? "未返信の新しい口コミはありません。接続成功と返信投稿の完了は別です。"
+              : "まだ口コミを取得していません。架空の口コミは投稿しません。",
+      "small",
+    );
+    if (state.lastError)
+      text("一部の処理を保留中です。接続や利用枠を確認してください。");
+    if (state.state === "active")
+      root.append(
+        button("利用を停止", () => dangerConfirm("pause"), "secondary"),
+      );
+    else
+      root.append(
+        button("利用を再開", () =>
+          mutate("activate", {
+            confirmed: true,
+            termsVersion: state.termsVersion,
+          }),
+        ),
+      );
+    root.append(
+      button("接続を切断", () => dangerConfirm("disconnect"), "danger"),
+    );
+  }
+  if (state.state !== "anonymous") {
+    if (!["active", "paused"].includes(state.state))
+      root.append(
+        button("接続を切断", () => dangerConfirm("disconnect"), "danger"),
+      );
+    root.append(
+      button(
+        "ログアウト",
+        async () => {
+          await api("logout", {});
+          lineCode = null;
+          location.assign("/start");
+        },
+        "secondary",
+      ),
+    );
+  }
+  root.append(button("状態を更新", () => refresh(true), "secondary"));
+  if (state.notice) showError({ code: state.notice });
+}
+refresh().catch(showError);
+setInterval(() => {
+  if (!busy && state?.state === "line_pending" && !state.lineDetected)
+    refresh().catch(showError);
+}, 3000);

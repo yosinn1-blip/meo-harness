@@ -27,6 +27,10 @@
 //   WHATSAPP_PHONE_NUMBER_ID — WhatsApp 送信元電話番号 ID
 //   WHATSAPP_VERIFY_TOKEN    — WhatsApp Webhook 検証トークン（任意文字列）
 
+import { createSelfContext } from './self-service/config.mjs';
+import { handleSelfRequest } from './self-service/router.mjs';
+import { runSelfScheduled } from './self-service/scheduled.mjs';
+
 import { generateReply, PROVIDERS } from '../src/reply-engine.mjs';
 import { verifyLineCredentials } from '../src/line-notify.mjs';
 import { sendDigest } from '../src/notify.mjs';
@@ -39,6 +43,8 @@ export default {
     const path = url.pathname;
 
     try {
+      const selfResponse = await handleSelfRequest(request, env, createSelfContext(env));
+      if (selfResponse) return selfResponse;
       if (method === 'GET' && path === '/health') {
         return json({ status: 'ok', version: env.VERSION ?? '0.1.0' });
       }
@@ -69,6 +75,7 @@ export default {
       }
 
       if (path === '/signup') {
+        if (env.SELF_DB || env.SELF_REGISTRATION_ENABLED === 'true') return json({error:'Use /start',url:'/start'},410);
         if (method === 'OPTIONS') return corsPreflight();
         if (method === 'POST') return await handleSignup(request, env);
       }
@@ -122,6 +129,8 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
+    try { await runSelfScheduled(createSelfContext(env)); }
+    catch { console.error("[cron/self] SELF_PROCESSING_FAILED"); }
     const utcHour = new Date().getUTCHours();
 
     // ① daily-digest バッファを吐き出す
@@ -398,6 +407,14 @@ async function processLineEvents(events, env) {
   const { parseLinkCode } = await import('../src/line-link.mjs');
   for (const event of events) {
     try {
+      if (env.SELF_DB && event.type === 'postback' && /^(approve|skip):ss_/.test(event.postback?.data ?? '')) {
+        const {handleSelfPostback}=await import('./self-service/approvals.mjs');
+        await handleSelfPostback(createSelfContext(env),event);continue;
+      }
+      if (env.SELF_DB && event.type === 'message' && /^MEOS-/.test(event.message?.text?.trim().toUpperCase() ?? '')) {
+        const {consumeLineCode}=await import('./self-service/line-link.mjs');
+        await consumeLineCode(createSelfContext(env),event);continue;
+      }
       if (event.type === 'postback') await handleLinePostback(event, env);
       if (event.type === 'message' && event.message?.type === 'text') {
         const code = parseLinkCode(event.message.text);
@@ -488,6 +505,10 @@ async function handleLineLink(event, env, code) {
   const store = JSON.parse(storeRaw);
   store.lineUserId = userId;
   store.lineChannelToken = store.lineChannelToken ?? env.LINE_CHANNEL_ACCESS_TOKEN;
+  if (env.SELF_DB && store.gbpLocationId) {
+    const {reserveLegacyLocations}=await import('./self-service/store-repository.mjs');
+    await reserveLegacyLocations(createSelfContext(env),[{storeId,locationId:store.gbpLocationId}]);
+  }
   await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
   await env.STORES.delete(`line-link:${code}`);
   await replyLineText(env, event.replyToken,
@@ -617,6 +638,10 @@ async function handleSignup(request, env) {
     notificationChannel: 'line',
     ...(timezone ? { timezone } : {}),
   };
+  if (env.SELF_DB && store.gbpLocationId) {
+    const {reserveLegacyLocations}=await import('./self-service/store-repository.mjs');
+    await reserveLegacyLocations(createSelfContext(env),[{storeId,locationId:store.gbpLocationId}]);
+  }
   await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
 
   return withCors(json({ ok: true, storeId, apiKey }));
@@ -712,6 +737,10 @@ async function handleAdminPut(request, env, storeId) {
     ...(gbpAccountId ? { gbpAccountId } : {}),
     ...(gbpLocationId ? { gbpLocationId } : {}),
   };
+  if (env.SELF_DB && store.gbpLocationId) {
+    const {reserveLegacyLocations}=await import('./self-service/store-repository.mjs');
+    await reserveLegacyLocations(createSelfContext(env),[{storeId,locationId:store.gbpLocationId}]);
+  }
   await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
   return json({ ok: true, storeId });
 }
@@ -850,6 +879,10 @@ async function handleGbpOAuthCallback(url, env) {
   } catch (err) {
     console.error(`[gbp/oauth] ${storeId}: 店舗の自動選択に失敗: ${err.message}`);
   }
+  if (env.SELF_DB && store.gbpLocationId) {
+    const {reserveLegacyLocations}=await import('./self-service/store-repository.mjs');
+    await reserveLegacyLocations(createSelfContext(env),[{storeId,locationId:store.gbpLocationId}]);
+  }
   await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
 
   const next = picked
@@ -947,6 +980,10 @@ async function handleGbpSelectLocation(request, env, storeId) {
 
   store.gbpAccountId = body.gbpAccountId;
   store.gbpLocationId = body.gbpLocationId;
+  if (env.SELF_DB && store.gbpLocationId) {
+    const {reserveLegacyLocations}=await import('./self-service/store-repository.mjs');
+    await reserveLegacyLocations(createSelfContext(env),[{storeId,locationId:store.gbpLocationId}]);
+  }
   await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
   return json({ ok: true, storeId, gbpAccountId: store.gbpAccountId, gbpLocationId: store.gbpLocationId });
 }
