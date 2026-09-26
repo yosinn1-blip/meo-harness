@@ -59,6 +59,7 @@ CREATE TABLE notification_jobs (
  day_key TEXT NOT NULL, part INTEGER NOT NULL, retry_key TEXT NOT NULL UNIQUE,
  payload_ciphertext TEXT, state TEXT NOT NULL, first_attempt_at INTEGER, expires_at INTEGER NOT NULL,
  accepted_request_id TEXT, lease_id TEXT, lease_until INTEGER,
+ attempt_no INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0,
  UNIQUE(store_id,day_key,part)
 );
 CREATE TABLE notification_items (

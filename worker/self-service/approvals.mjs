@@ -58,15 +58,32 @@ async function texts(ctx, r, j) {
     ),
   };
 }
-async function mark(ctx, r, state, stage = state) {
-  await ctx.db.batch([
-    ctx.db.prepare("UPDATE replies SET state=? WHERE id=?").bind(state, r.id),
-    ctx.db
-      .prepare(
-        "UPDATE review_jobs SET stage=?,lease_id=NULL,lease_until=NULL,updated_at=? WHERE id=?",
-      )
-      .bind(stage, ctx.now(), r.job_id),
-  ]);
+async function mark(ctx, r, state, stage = state, leaseId = null) {
+  try {
+    await ctx.db.batch([
+      ctx.db
+        .prepare(
+          "INSERT INTO mutation_guards SELECT EXISTS(SELECT 1 FROM replies r JOIN review_jobs j ON j.id=r.job_id JOIN stores s ON s.id=r.store_id WHERE r.id=? AND r.state=? AND r.generation=s.generation AND s.state='active' AND (? IS NULL OR j.lease_id=?))",
+        )
+        .bind(r.id, r.state, leaseId, leaseId),
+      ctx.db.prepare("UPDATE replies SET state=? WHERE id=?").bind(state, r.id),
+      ctx.db
+        .prepare(
+          "UPDATE review_jobs SET stage=?,lease_id=NULL,lease_until=NULL,updated_at=?,next_attempt_at=? WHERE id=?",
+        )
+        .bind(
+          stage,
+          ctx.now(),
+          ctx.now() + (state === "post_unknown" ? 60000 : 0),
+          r.job_id,
+        ),
+      ctx.db.prepare("DELETE FROM mutation_guards"),
+    ]);
+  } catch (e) {
+    if (/CHECK constraint failed/i.test(e.message))
+      return { ok: false, code: "POST_PENDING" };
+    throw e;
+  }
   return {
     ok: state === "posted",
     code:
@@ -102,8 +119,15 @@ export async function reconcileReply(ctx, id) {
   );
   if (!["posting", "post_unknown"].includes(r.state))
     return { ok: false, code: "NOT_PENDING" };
-  if (r.state === "posting" && j.lease_until > ctx.now())
-    return { ok: false, code: "POST_PENDING" };
+  if (j.lease_until > ctx.now()) return { ok: false, code: "POST_PENDING" };
+  const lease = crypto.randomUUID();
+  const claimed = await ctx.db
+    .prepare(
+      "UPDATE review_jobs SET lease_id=?,lease_until=?,next_attempt_at=? WHERE id=? AND (lease_until IS NULL OR lease_until<=?) AND EXISTS(SELECT 1 FROM replies r JOIN stores s ON s.id=r.store_id WHERE r.job_id=review_jobs.id AND r.state=? AND r.generation=s.generation AND s.state='active') RETURNING id",
+    )
+    .bind(lease, ctx.now() + 60000, ctx.now() + 60000, j.id, ctx.now(), r.state)
+    .first();
+  if (!claimed) return { ok: false, code: "POST_PENDING" };
   const { draft, review } = await texts(ctx, r, j);
   const current = await getGbpReview({
     accessToken: await googleAccessToken(ctx, s.ownerSub),
@@ -118,8 +142,14 @@ export async function reconcileReply(ctx, id) {
     storedReviewVersionTime: review.updateTime ?? review.createTime,
   });
   return state === "unchanged"
-    ? mark(ctx, r, "pending", "notified")
-    : mark(ctx, r, state === "posted" ? "posted" : "conflict");
+    ? mark(ctx, r, "pending", "reapproval_required", lease)
+    : mark(
+        ctx,
+        r,
+        state === "posted" ? "posted" : "conflict",
+        state === "posted" ? "posted" : "conflict",
+        lease,
+      );
 }
 export async function handleSelfPostback(ctx, event) {
   try {
@@ -220,9 +250,21 @@ export async function handleSelfPostback(ctx, event) {
     );
     try {
       await postGbpReply({ ...args, comment: draft });
-      return await mark(ctx, r, "posted");
+      return await mark(
+        ctx,
+        { ...r, state: "posting" },
+        "posted",
+        "posted",
+        lease,
+      );
     } catch {
-      await mark(ctx, r, "post_unknown");
+      await mark(
+        ctx,
+        { ...r, state: "posting" },
+        "post_unknown",
+        "post_unknown",
+        lease,
+      );
       return { ok: false, code: "POST_RESULT_UNKNOWN" };
     }
   } catch (e) {

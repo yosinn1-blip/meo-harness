@@ -29,3 +29,5 @@
 Google接続からLINE確認までのローカルE2Eは架空プロバイダを使います。架空デモの成功を本番利用可能と説明しないでください。
 
 自分のインフラに設置する希望が明確な場合だけ [自前運用](/self/help/self-hosting) を案内します。通常登録と、自前のGoogle Business Profile API承認が必要な設置は別です。未知の外部リポジトリにFull Accessを勧めません。
+
+`/account`の返信ごとの結果も確認します。`posted`は投稿確認、`conflict`は上書きせず停止、`post_unknown`は照合待ち、`reapproval_required`は未投稿確認後の本人再承認待ちです。接続中を投稿成功と説明せず、再承認・再生成を本人に代わって勝手に行いません。

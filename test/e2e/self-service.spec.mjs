@@ -229,6 +229,33 @@ test("multiple stores, long Japanese review, wrong LINE actor and approval use o
     userId: "line-fixture",
   });
   expect(app.writes).toHaveLength(1);
+  expect(app.feedback.at(-1)?.messages[0]?.text).toContain(
+    "Googleへの投稿を確認しました",
+  );
+  await page.goto(app.baseURL + "/account");
+  await expect(
+    page.getByRole("heading", { name: "最近の返信結果" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("未返信の新しい口コミはありません。", { exact: false }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("投稿を確認しました", { exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "output/self-service/desktop-approved.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "output/self-service/mobile-approved.png",
+    fullPage: true,
+  });
   await fixture(page, "postback", {
     action: approve.data,
     userId: "line-fixture",

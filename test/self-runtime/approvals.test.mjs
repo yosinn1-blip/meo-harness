@@ -151,3 +151,104 @@ test("Google accepts PUT then DB fails: expired lease reconciles without a secon
   );
   assert.equal(writes(), 1);
 });
+function deferred() {
+  let resolve;
+  const promise = new Promise((r) => (resolve = r));
+  return { promise, resolve };
+}
+test("an expired reconciliation cannot erase a newer posting lease with its stale GET", async (t) => {
+  const { ctx, writes } = await setup(t);
+  await ctx.db.prepare("UPDATE replies SET state='post_unknown'").run();
+  await ctx.db.prepare("UPDATE review_jobs SET stage='post_unknown'").run();
+  const original = ctx.fetchImpl;
+  const aStarted = deferred(),
+    aFinish = deferred(),
+    putStarted = deferred(),
+    putFinish = deferred();
+  let gets = 0;
+  let now = ctx.now();
+  ctx.now = () => now;
+  ctx.fetchImpl = async (u, i = {}) => {
+    if (String(u).includes("/reviews/") && i.method !== "PUT" && ++gets === 1) {
+      aStarted.resolve();
+      await aFinish.promise;
+      return Response.json({ updateTime: "2026-09-26T00:00:00Z" });
+    }
+    if (i.method === "PUT") {
+      putStarted.resolve();
+      await putFinish.promise;
+    }
+    return original(u, i);
+  };
+  const a = reconcileReply(ctx, "ss_r");
+  await aStarted.promise;
+  now += 61000;
+  await reconcileReply(ctx, "ss_r");
+  const c = handleSelfPostback(ctx, event());
+  await putStarted.promise;
+  try {
+    aFinish.resolve();
+    await a;
+    assert.equal(
+      (await ctx.db.prepare("SELECT state FROM replies").first()).state,
+      "posting",
+    );
+    assert.ok(
+      (await ctx.db.prepare("SELECT lease_id FROM review_jobs").first())
+        .lease_id,
+    );
+  } finally {
+    aFinish.resolve();
+    putFinish.resolve();
+    await c;
+  }
+  assert.equal(writes(), 1);
+  assert.equal(
+    (await ctx.db.prepare("SELECT state FROM replies").first()).state,
+    "posted",
+  );
+});
+test("obsolete unknown replies cannot starve a current recoverable reply in scheduled reconciliation", async (t) => {
+  const { ctx } = await setup(t);
+  await ctx.db.prepare("UPDATE replies SET state='post_unknown'").run();
+  await ctx.db
+    .prepare("UPDATE review_jobs SET stage='post_unknown',next_attempt_at=0")
+    .run();
+  const current = await ctx.db.prepare("SELECT * FROM replies").first();
+  for (let i = 0; i < 5; i++) {
+    await ctx.db
+      .prepare(
+        "INSERT INTO review_jobs(id,store_id,review_id,review_version,generation,stage,payload_ciphertext,next_attempt_at,created_at,updated_at) SELECT ?,store_id,?,'old',0,'post_unknown',payload_ciphertext,0,created_at,updated_at FROM review_jobs WHERE id='j'",
+      )
+      .bind("old" + i, "old" + i)
+      .run();
+    await ctx.db
+      .prepare(
+        "INSERT INTO replies SELECT ?,?,store_id,0,draft_ciphertext,draft_hash,'post_unknown',expires_at FROM replies WHERE id='ss_r'",
+      )
+      .bind("ss_old" + i, "old" + i)
+      .run();
+  }
+  await ctx.db.prepare("DELETE FROM replies WHERE id='ss_r'").run();
+  await ctx.db
+    .prepare("INSERT INTO replies VALUES (?,?,?,?,?,?,?,?)")
+    .bind(...Object.values(current))
+    .run();
+  const { runSelfScheduled } = await import(
+    "../../worker/self-service/scheduled.mjs"
+  );
+  await runSelfScheduled(ctx);
+  assert.equal(
+    (
+      await ctx.db
+        .prepare("SELECT stage FROM review_jobs WHERE id='old0'")
+        .first()
+    ).stage,
+    "cancelled",
+  );
+  assert.equal(
+    (await ctx.db.prepare("SELECT state FROM replies WHERE id='ss_r'").first())
+      .state,
+    "pending",
+  );
+});

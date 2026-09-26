@@ -22,14 +22,25 @@ export function reservationStatement(ctx, { id, scope, period, kind, units }) {
 export async function reserveUsage(ctx, args) {
   return reserveUsageBatch(ctx, [args]);
 }
-export async function reserveUsageBatch(ctx, args) {
+export async function reserveUsageBatch(
+  ctx,
+  args,
+  { before = [], after = [] } = {},
+) {
   try {
-    await ctx.db.batch(args.map((a) => reservationStatement(ctx, a)));
+    await ctx.db.batch([
+      ...before,
+      ...args.map((a) => reservationStatement(ctx, a)),
+      ...after,
+    ]);
     return { ok: true, code: "RESERVED" };
   } catch (e) {
     if (e.message.includes("RESERVATION_RELEASED"))
       return { ok: false, code: "RESERVATION_RELEASED" };
-    if (e.message.includes("QUOTA_EXHAUSTED"))
+    if (
+      e.message.includes("QUOTA_EXHAUSTED") ||
+      /CHECK constraint failed/i.test(e.message)
+    )
       return { ok: false, code: "QUOTA_EXHAUSTED" };
     if (e.message.includes("RESERVATION_MISMATCH"))
       throw new SelfError("RESERVATION_MISMATCH", 409);
@@ -43,9 +54,9 @@ export async function settleUsage(ctx, id, outcome) {
   );
   await ctx.db
     .prepare(
-      "UPDATE usage_reservations SET state=? WHERE id=? AND state<>'released' AND (state<>'committed' OR ?='released' AND kind='active')",
+      "UPDATE usage_reservations SET state=? WHERE id IN (?,?) AND state<>'released' AND (state<>'committed' OR ?='released' AND kind='active')",
     )
-    .bind(outcome, id, outcome)
+    .bind(outcome, id, id + ":provider", outcome)
     .run();
 }
 export function remainingPushBudget({
@@ -65,22 +76,10 @@ export function remainingPushBudget({
   );
 }
 export async function reservePush(ctx, { id, storeId }) {
-  const c = readSelfConfig(ctx.env);
+  const c = readSelfConfig(ctx.env),
+    period = dateKeys(ctx.now()).month;
   if (!c.processingEnabled || c.limits.pushes === 0)
     return { ok: false, code: "PROCESSING_CLOSED" };
-  const period = dateKeys(ctx.now()).month;
-  await budgetStatement(ctx, {
-    scope: "channel",
-    period,
-    kind: "push",
-    cap: c.limits.pushes,
-  }).run();
-  const current = await ctx.db
-    .prepare(
-      "SELECT used,cap FROM usage_budgets WHERE scope='channel' AND period=? AND kind='push'",
-    )
-    .bind(period)
-    .first();
   const prior = await ctx.db
     .prepare("SELECT state,period FROM usage_reservations WHERE id=?")
     .bind(id)
@@ -90,8 +89,7 @@ export async function reservePush(ctx, { id, storeId }) {
     return { ok: false, code: "RESERVATION_RELEASED" };
   if (prior && prior.period !== period)
     return { ok: false, code: "QUOTA_PERIOD_CHANGED" };
-  if (!prior && current.used >= current.cap)
-    return { ok: false, code: "QUOTA_EXHAUSTED" };
+  let consumed, providerCap;
   try {
     const headers = {
       Authorization: "Bearer " + ctx.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -100,38 +98,66 @@ export async function reservePush(ctx, { id, storeId }) {
       "https://api.line.me/v2/bot/message/quota",
       { headers, signal: AbortSignal.timeout(10000) },
     );
-    const consumed = await ctx.fetchImpl(
+    const usage = await ctx.fetchImpl(
       "https://api.line.me/v2/bot/message/quota/consumption",
       { headers, signal: AbortSignal.timeout(10000) },
     );
-    if (!quota.ok || !consumed.ok) return { ok: false, code: "QUOTA_UNKNOWN" };
-    const q = await quota.json(),
-      used = (await consumed.json()).totalUsage;
-    const remaining =
+    if (!quota.ok || !usage.ok) return { ok: false, code: "QUOTA_UNKNOWN" };
+    const q = await quota.json();
+    consumed = (await usage.json()).totalUsage;
+    const total =
       q.type === "none"
         ? Number.MAX_SAFE_INTEGER
         : q.type === "limited"
-          ? q.value - used
+          ? q.value
           : null;
     if (
-      !Number.isFinite(used) ||
-      remainingPushBudget({
-        localRemaining: current.cap - current.used + (prior ? 1 : 0),
-        providerRemaining: remaining,
-        legacyReserve: c.limits.legacyReserve,
-      }) < 1
+      !Number.isSafeInteger(consumed) ||
+      consumed < 0 ||
+      !Number.isSafeInteger(total) ||
+      total < 0
     )
-      return { ok: false, code: "QUOTA_EXHAUSTED" };
+      return { ok: false, code: "QUOTA_UNKNOWN" };
+    providerCap = Math.max(0, total - c.limits.legacyReserve);
+    if (consumed >= providerCap) return { ok: false, code: "QUOTA_EXHAUSTED" };
   } catch {
     return { ok: false, code: "QUOTA_UNKNOWN" };
   }
-  return reserveUsage(ctx, {
-    id,
-    scope: "channel",
-    period,
-    kind: "push",
-    units: 1,
-  });
+  // Monotonic shadow usage includes accepted local calls even before LINE's
+  // counter catches up, plus all uncertain/in-flight local reservations.
+  // Conservative overlap can hold capacity; never reclaim an unknown send.
+  const before = [
+    budgetStatement(ctx, {
+      scope: "channel",
+      period,
+      kind: "push",
+      cap: c.limits.pushes,
+    }),
+    ctx.db
+      .prepare(
+        "INSERT INTO usage_budgets(scope,period,kind,cap,used) VALUES ('channel',?,'provider_push',?,?) ON CONFLICT(scope,period,kind) DO UPDATE SET cap=excluded.cap,used=MAX(usage_budgets.used,excluded.used+(SELECT COALESCE(SUM(units),0) FROM usage_reservations WHERE scope='channel' AND period=? AND kind='push' AND state IN ('reserved','uncertain')))",
+      )
+      .bind(period, providerCap, consumed, period),
+    ctx.db
+      .prepare(
+        "INSERT INTO mutation_guards SELECT NOT EXISTS(SELECT 1 FROM usage_budgets WHERE scope='channel' AND period=? AND kind IN ('push','provider_push') AND used>cap)",
+      )
+      .bind(period),
+  ];
+  return reserveUsageBatch(
+    ctx,
+    [
+      { id, scope: "channel", period, kind: "push", units: 1 },
+      {
+        id: id + ":provider",
+        scope: "channel",
+        period,
+        kind: "provider_push",
+        units: 1,
+      },
+    ],
+    { before, after: [ctx.db.prepare("DELETE FROM mutation_guards")] },
+  );
 }
 export async function sendReservedPush(ctx, { id, to, messages, retryKey }) {
   const reservation = await ctx.db
@@ -175,7 +201,11 @@ export async function sendReservedPush(ctx, { id, to, messages, retryKey }) {
   }
   await settleUsage(ctx, id, response.status >= 500 ? "uncertain" : "released");
   throw new SelfError(
-    response.status >= 500 ? "LINE_RESULT_UNKNOWN" : "LINE_SEND_FAILED",
+    response.status >= 500
+      ? "LINE_RESULT_UNKNOWN"
+      : response.status === 429
+        ? "LINE_RETRY_REQUIRED"
+        : "LINE_SEND_FAILED",
     502,
   );
 }

@@ -65,7 +65,8 @@ export async function startTestApp() {
   const fixtureKey = crypto.randomUUID();
   const unexpected = [],
     writes = [],
-    pushes = [];
+    pushes = [],
+    feedback = [];
   const settings = {
     locations: 1,
     googleFailure: false,
@@ -137,6 +138,10 @@ export async function startTestApp() {
         usage: { total_tokens: 10 },
       });
     if (u.hostname === "api.line.me") {
+      if (u.pathname.endsWith("/reply")) {
+        feedback.push(JSON.parse(init.body));
+        return Response.json({});
+      }
       if (u.pathname.endsWith("/quota"))
         return Response.json({ type: "limited", value: settings.quota });
       if (u.pathname.endsWith("/consumption"))
@@ -207,6 +212,7 @@ export async function startTestApp() {
                 {
                   type: data.action ? "postback" : "message",
                   postback: data.action ? { data: data.action } : undefined,
+                  replyToken: "fixture-reply-" + crypto.randomUUID(),
                   webhookEventId: crypto.randomUUID(),
                   source: { type: "user", userId: data.userId },
                   message: { type: "text", text: data.code },
@@ -297,6 +303,7 @@ export async function startTestApp() {
     unexpected,
     writes,
     pushes,
+    feedback,
     db,
     ctx,
     async stop() {

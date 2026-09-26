@@ -409,7 +409,10 @@ async function processLineEvents(events, env) {
     try {
       if (env.SELF_DB && event.type === 'postback' && /^(approve|skip):ss_/.test(event.postback?.data ?? '')) {
         const {handleSelfPostback}=await import('./self-service/approvals.mjs');
-        await handleSelfPostback(createSelfContext(env),event);continue;
+        const selfCtx=createSelfContext(env);
+        const result=await handleSelfPostback(selfCtx,event);
+        const {sendSelfFeedback}=await import("./self-service/feedback.mjs");
+        await sendSelfFeedback(selfCtx,event,result);continue;
       }
       if (env.SELF_DB && event.type === 'message' && /^MEOS-/.test(event.message?.text?.trim().toUpperCase() ?? '')) {
         const {consumeLineCode}=await import('./self-service/line-link.mjs');

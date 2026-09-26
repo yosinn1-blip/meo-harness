@@ -267,3 +267,102 @@ test("more than 50 reviews resumes a bounded scan; old and already answered revi
     148,
   );
 });
+test("budget-held ungenerated review is rehydrated after retention and processed when quota returns", async (t) => {
+  const { ctx, store, calls } = await setup(t, { drafts: "0" });
+  await pollSelfStore(ctx, store.id);
+  const before = ctx.now();
+  ctx.now = () => before + 8 * 86400000;
+  const { purgeExpired } = await import(
+    "../../worker/self-service/retention.mjs"
+  );
+  await purgeExpired(ctx);
+  await pollSelfStore(ctx, store.id);
+  ctx.env.SELF_MONTHLY_DRAFT_LIMIT = "1";
+  await processSelfJobs(ctx);
+  assert.equal(calls.ai, 1);
+  assert.equal(
+    (await ctx.db.prepare("SELECT count(*) n FROM replies").first()).n,
+    1,
+  );
+});
+test("a digest rejected with 429 recovers after backoff with the same payload and retry key", async (t) => {
+  const { ctx, store } = await setup(t);
+  await pollSelfStore(ctx, store.id);
+  await processSelfJobs(ctx);
+  const original = ctx.fetchImpl;
+  const attempts = [];
+  ctx.fetchImpl = async (u, i = {}) => {
+    if (String(u).endsWith("/push")) {
+      attempts.push({ body: i.body, key: i.headers["X-Line-Retry-Key"] });
+      if (attempts.length === 1) return Response.json({}, { status: 429 });
+    }
+    return original(u, i);
+  };
+  await assert.rejects(() => sendSelfDigest(ctx, store.id));
+  const before = ctx.now();
+  ctx.now = () => before + 61000;
+  await sendSelfDigest(ctx, store.id);
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(attempts[0], attempts[1]);
+  assert.equal(
+    (await ctx.db.prepare("SELECT state FROM notification_jobs").first()).state,
+    "accepted",
+  );
+  assert.equal(
+    (
+      await ctx.db
+        .prepare("SELECT used FROM usage_budgets WHERE kind='push'")
+        .first()
+    ).used,
+    1,
+  );
+});
+test("valid AI result survives one storage failure without another generation even when quota remains", async (t) => {
+  const { ctx, store, calls } = await setup(t, { drafts: "3" });
+  await pollSelfStore(ctx, store.id);
+  await ctx.db.prepare("DELETE FROM review_jobs WHERE review_id<>'r0'").run();
+  const db = ctx.db;
+  let failed = false;
+  ctx.db = {
+    prepare: db.prepare.bind(db),
+    batch(stmts) {
+      if (calls.ai && !failed) {
+        failed = true;
+        throw new Error("fixture storage fail");
+      }
+      return db.batch(stmts);
+    },
+  };
+  await processSelfJobs(ctx);
+  const now = ctx.now();
+  ctx.now = () => now + 61000;
+  await processSelfJobs(ctx);
+  assert.equal(calls.ai, 1);
+  assert.equal(
+    (await db.prepare("SELECT count(*) n FROM replies").first()).n,
+    1,
+  );
+});
+test("persistent draft storage failure holds the known success instead of automatically buying another AI call", async (t) => {
+  const { ctx, store, calls } = await setup(t, { drafts: "3" });
+  await pollSelfStore(ctx, store.id);
+  await ctx.db.prepare("DELETE FROM review_jobs WHERE review_id<>'r0'").run();
+  const db = ctx.db;
+  ctx.db = {
+    prepare: db.prepare.bind(db),
+    batch(stmts) {
+      if (calls.ai) throw new Error("fixture persistent storage fail");
+      return db.batch(stmts);
+    },
+  };
+  await processSelfJobs(ctx);
+  ctx.db = db;
+  const now = ctx.now();
+  ctx.now = () => now + 61000;
+  await processSelfJobs(ctx);
+  assert.equal(calls.ai, 1);
+  assert.equal(
+    (await db.prepare("SELECT stage FROM review_jobs").first()).stage,
+    "draft_storage_held",
+  );
+});

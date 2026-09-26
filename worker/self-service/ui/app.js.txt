@@ -395,9 +395,11 @@ async function render() {
             ? "承認待ちの返信案: " +
               state.pendingCount +
               "件。LINEで内容を確認してください。"
-            : state.lastCheckedAt
-              ? "未返信の新しい口コミはありません。接続成功と返信投稿の完了は別です。"
-              : "まだ口コミを取得していません。架空の口コミは投稿しません。",
+            : state.replyResults?.length
+              ? "各口コミの処理結果を下に表示しています。"
+              : state.lastCheckedAt
+                ? "未返信の新しい口コミはありません。接続成功と返信投稿の完了は別です。"
+                : "まだ口コミを取得していません。架空の口コミは投稿しません。",
       "small",
     );
     if (state.lastError)
@@ -419,6 +421,39 @@ async function render() {
       button("接続を切断", () => dangerConfirm("disconnect"), "danger"),
     );
   }
+  if (state.replyResults?.length) {
+    root.append(node("h3", "最近の返信結果"));
+    const labels = {
+      pending: "承認待ち",
+      posting: "投稿結果を確認中",
+      post_unknown: "投稿結果を照合中",
+      reapproval_required: "未投稿を確認。LINEで再承認してください",
+      posted: "投稿を確認しました",
+      conflict: "変更・別の返信があるため上書きしませんでした",
+      skipped: "スキップしました",
+      expired: "有効期限が切れました",
+      cancelled: "古い通知を無効にしました",
+    };
+    const list = node("ul", undefined, "reply-results");
+    for (const result of state.replyResults) {
+      const item = node("li");
+      item.append(
+        node("strong", labels[result.state] ?? "処理を確認中"),
+        node("p", new Date(result.updatedAt).toLocaleString("ja-JP"), "small"),
+      );
+      if (result.canView)
+        item.append(
+          link("口コミと返信案を確認", "/account/replies/" + result.id),
+        );
+      list.append(item);
+    }
+    root.append(list);
+  }
+  if (state.lastError === "DRAFT_STORAGE_HELD")
+    text(
+      "返信案の保存に失敗したため自動再生成を止めています。再生成を希望する場合は一度停止して再開してください。下書きの利用枠を再び消費します。",
+      "small",
+    );
   if (state.state !== "anonymous") {
     if (!["active", "paused"].includes(state.state))
       root.append(

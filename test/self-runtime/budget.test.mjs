@@ -145,3 +145,27 @@ test("uncertain LINE retries recheck the shared provider quota", async (t) => {
     false,
   );
 });
+test("the last provider unit after legacy reserve is atomic across concurrent local requests", async (t) => {
+  const { db } = await withD1(t);
+  await applySchema(db);
+  const ctx = createSelfContext(
+    fixtureEnv(db, {
+      SELF_MONTHLY_PUSH_LIMIT: "10",
+      SELF_LEGACY_PUSH_RESERVE: "2",
+    }),
+    {
+      fetchImpl: async (u) =>
+        Response.json(
+          String(u).endsWith("/consumption")
+            ? { totalUsage: 97 }
+            : { type: "limited", value: 100 },
+        ),
+    },
+  );
+  const results = await Promise.all(
+    ["p1", "p2"].map((id) => reservePush(ctx, { id, storeId: id })),
+  );
+  assert.equal(results.filter((r) => r.ok).length, 1);
+  const third = await reservePush(ctx, { id: "p3", storeId: "s" });
+  assert.equal(third.ok, false);
+});

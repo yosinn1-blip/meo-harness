@@ -58,7 +58,7 @@ export async function pollSelfStore(ctx, storeId) {
       statements.push(
         ctx.db
           .prepare(
-            "INSERT INTO review_jobs(id,store_id,review_id,review_version,generation,stage,payload_ciphertext,next_attempt_at,created_at,updated_at) VALUES (?,?,?,?,?,'fetched',?,?,?,?) ON CONFLICT DO NOTHING",
+            "INSERT INTO review_jobs(id,store_id,review_id,review_version,generation,stage,payload_ciphertext,next_attempt_at,created_at,updated_at) VALUES (?,?,?,?,?,'fetched',?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload_ciphertext=excluded.payload_ciphertext,created_at=excluded.created_at,updated_at=excluded.updated_at WHERE review_jobs.stage='fetched' AND review_jobs.payload_ciphertext IS NULL",
           )
           .bind(
             id,
@@ -100,7 +100,14 @@ export async function pollSelfStore(ctx, storeId) {
 export async function processSelfJobs(ctx, { limit = 5 } = {}) {
   const c = readSelfConfig(ctx.env);
   if (!c.processingEnabled || c.limits.drafts === 0) return;
-  // A worker crash cannot imply an AI result. Retain charged reservations and retry under a new attempt.
+  // A known successful generation whose write was interrupted is held, never bought again automatically.
+  await ctx.db
+    .prepare(
+      "UPDATE review_jobs SET stage='draft_storage_held',lease_id=NULL,lease_until=NULL WHERE stage='drafting' AND lease_until<=? AND EXISTS(SELECT 1 FROM usage_reservations u WHERE u.id='draft:'||review_jobs.id||':'||review_jobs.attempts AND u.state='committed')",
+    )
+    .bind(ctx.now())
+    .run();
+  // Other crashed attempts retain their charged reservation; retry is bounded.
   await ctx.db
     .prepare(
       "UPDATE review_jobs SET stage='fetched',lease_id=NULL,lease_until=NULL WHERE stage='drafting' AND lease_until<=? AND attempts<5",
@@ -154,6 +161,7 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
         .run();
       continue;
     }
+    let validDraft = false;
     try {
       const current = await getStore(ctx, store.id);
       ensure(
@@ -181,8 +189,9 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
         "DRAFT_INVALID",
         422,
       );
+      validDraft = true;
       const replyId = "ss_" + job.id;
-      await ctx.db.batch([
+      const saveStatements = [
         storeGuard(ctx, store, ["active"]),
         ctx.db
           .prepare(
@@ -208,7 +217,15 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
           )
           .bind(ctx.now(), job.id, job.lease_id),
         ctx.db.prepare("DELETE FROM mutation_guards"),
-      ]);
+      ];
+      for (let storageAttempt = 0; storageAttempt < 3; storageAttempt++) {
+        try {
+          await ctx.db.batch(saveStatements);
+          break;
+        } catch (error) {
+          if (storageAttempt === 2) throw error;
+        }
+      }
     } catch (e) {
       await settleUsage(ctx, reservation, "uncertain");
       await ctx.db
@@ -216,7 +233,11 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
           "UPDATE review_jobs SET stage=?,lease_id=NULL,lease_until=NULL,next_attempt_at=?,updated_at=? WHERE id=? AND lease_id=?",
         )
         .bind(
-          job.attempts >= 5 ? "blocked" : "fetched",
+          validDraft
+            ? "draft_storage_held"
+            : job.attempts >= 5
+              ? "blocked"
+              : "fetched",
           ctx.now() + [60000, 300000, 1800000][Math.min(job.attempts - 1, 2)],
           ctx.now(),
           job.id,
@@ -225,7 +246,10 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
         .run();
       await ctx.db
         .prepare("UPDATE stores SET last_error=? WHERE id=?")
-        .bind("DRAFT_RETRY_REQUIRED", store.id)
+        .bind(
+          validDraft ? "DRAFT_STORAGE_HELD" : "DRAFT_RETRY_REQUIRED",
+          store.id,
+        )
         .run();
     }
   }

@@ -122,17 +122,20 @@ export async function sendSelfDigest(ctx, storeId) {
       .run();
     return;
   }
+  if (notification.next_attempt_at > ctx.now()) return;
   const lease = crypto.randomUUID();
   const claim = await ctx.db
     .prepare(
-      "UPDATE notification_jobs SET lease_id=?,lease_until=? WHERE id=? AND state='pending' AND (lease_until IS NULL OR lease_until<=?) RETURNING *",
+      "UPDATE notification_jobs SET lease_id=?,lease_until=? WHERE id=? AND state='pending' AND next_attempt_at<=? AND (lease_until IS NULL OR lease_until<=?) RETURNING *",
     )
-    .bind(lease, ctx.now() + 60000, notification.id, ctx.now())
+    .bind(lease, ctx.now() + 60000, notification.id, ctx.now(), ctx.now())
     .first();
   if (!claim) return;
+  notification = claim;
+  const reservationId = notification.id + ":attempt:" + notification.attempt_no;
   try {
     const reservation = await reservePush(ctx, {
-      id: notification.id,
+      id: reservationId,
       storeId,
     });
     if (!reservation.ok) return;
@@ -157,7 +160,7 @@ export async function sendSelfDigest(ctx, storeId) {
       ),
     );
     const result = await sendReservedPush(ctx, {
-      id: notification.id,
+      id: reservationId,
       ...payload,
       retryKey: notification.retry_key,
     });
@@ -173,6 +176,24 @@ export async function sendSelfDigest(ctx, storeId) {
         )
         .bind(ctx.now(), notification.id),
     ]);
+  } catch (e) {
+    if (["LINE_RETRY_REQUIRED", "LINE_SEND_FAILED"].includes(e.code)) {
+      const delay = [60000, 300000, 1800000][
+        Math.min(notification.attempt_no, 2)
+      ];
+      await ctx.db
+        .prepare(
+          "UPDATE notification_jobs SET attempt_no=attempt_no+1,next_attempt_at=?,state=? WHERE id=? AND lease_id=?",
+        )
+        .bind(
+          ctx.now() + delay,
+          notification.attempt_no >= 4 ? "blocked" : "pending",
+          notification.id,
+          lease,
+        )
+        .run();
+    }
+    throw e;
   } finally {
     await ctx.db
       .prepare(
