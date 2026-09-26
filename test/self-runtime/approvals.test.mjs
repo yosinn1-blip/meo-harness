@@ -122,3 +122,32 @@ test("full text is owner-scoped and expires", async (t) => {
   ctx.now = () => Date.now() + 8 * 86400000;
   await assert.rejects(() => readOwnedReply(ctx, { sub: "alice" }, "ss_r"));
 });
+test("Google accepts PUT then DB fails: expired lease reconciles without a second PUT", async (t) => {
+  const { ctx, writes } = await setup(t);
+  const db = ctx.db;
+  let failures = 0;
+  ctx.db = {
+    prepare: db.prepare.bind(db),
+    batch(statements) {
+      if (writes() && failures < 2) {
+        failures++;
+        throw new Error("fixture write failure");
+      }
+      return db.batch(statements);
+    },
+  };
+  await handleSelfPostback(ctx, event());
+  assert.equal(writes(), 1);
+  assert.equal(
+    (await db.prepare("SELECT state FROM replies").first()).state,
+    "posting",
+  );
+  const now = ctx.now();
+  ctx.now = () => now + 61000;
+  await reconcileReply(ctx, "ss_r");
+  assert.equal(
+    (await db.prepare("SELECT state FROM replies").first()).state,
+    "posted",
+  );
+  assert.equal(writes(), 1);
+});

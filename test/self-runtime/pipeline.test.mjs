@@ -170,3 +170,100 @@ test("last-attempt crashed drafting lease becomes blocked instead of remaining s
   const jobs = await ctx.db.prepare("SELECT stage FROM review_jobs").all();
   assert.ok(jobs.results.every((x) => x.stage === "blocked"));
 });
+test("AI response followed by DB failure retains consumption and cannot exceed the cap on retry", async (t) => {
+  const { ctx, store, calls } = await setup(t);
+  await pollSelfStore(ctx, store.id);
+  const db = ctx.db;
+  let failed = false;
+  ctx.db = {
+    prepare: db.prepare.bind(db),
+    batch(statements) {
+      if (calls.ai && !failed) {
+        failed = true;
+        throw new Error("fixture DB failure");
+      }
+      return db.batch(statements);
+    },
+  };
+  await processSelfJobs(ctx);
+  const now = ctx.now();
+  ctx.now = () => now + 61000;
+  await processSelfJobs(ctx);
+  assert.equal(calls.ai, 1);
+  assert.equal(
+    (
+      await db
+        .prepare("SELECT used FROM usage_budgets WHERE kind='draft'")
+        .first()
+    ).used,
+    1,
+  );
+});
+test("LINE accepted then notification DB update fails: retry sends no second push", async (t) => {
+  const { ctx, store, calls } = await setup(t);
+  await pollSelfStore(ctx, store.id);
+  await processSelfJobs(ctx);
+  const db = ctx.db;
+  let failed = false;
+  ctx.db = {
+    prepare: db.prepare.bind(db),
+    batch(statements) {
+      if (calls.push.length && !failed) {
+        failed = true;
+        throw new Error("fixture DB failure");
+      }
+      return db.batch(statements);
+    },
+  };
+  await assert.rejects(() => sendSelfDigest(ctx, store.id));
+  await sendSelfDigest(ctx, store.id);
+  assert.equal(calls.push.length, 1);
+  assert.equal(
+    (await db.prepare("SELECT state FROM notification_jobs").first()).state,
+    "accepted",
+  );
+  assert.equal(
+    (
+      await db
+        .prepare("SELECT used FROM usage_budgets WHERE kind='push'")
+        .first()
+    ).used,
+    1,
+  );
+});
+test("more than 50 reviews resumes a bounded scan; old and already answered reviews are excluded", async (t) => {
+  const { ctx, store } = await setup(t, { drafts: "0" });
+  const fallback = ctx.fetchImpl;
+  const pages = [];
+  ctx.fetchImpl = async (input, init) => {
+    const u = new URL(input);
+    if (u.hostname !== "mybusiness.googleapis.com")
+      return fallback(input, init);
+    const p = Number(u.searchParams.get("pageToken") ?? 0);
+    pages.push(p);
+    return Response.json({
+      reviews: Array.from({ length: 50 }, (_, i) => ({
+        reviewId: "r" + (p * 50 + i),
+        comment: "架空口コミ",
+        starRating: "FIVE",
+        createTime:
+          p === 0 && i === 0 ? "2026-01-01T00:00:00Z" : "2026-09-26T00:00:00Z",
+        updateTime: "2026-09-26T00:00:00Z",
+        ...(p === 0 && i === 1 ? { reviewReply: { comment: "既存返信" } } : {}),
+      })),
+      ...(p < 2 ? { nextPageToken: String(p + 1) } : {}),
+    });
+  };
+  await pollSelfStore(ctx, store.id);
+  assert.deepEqual(pages, [0, 1]);
+  assert.equal(
+    (await ctx.db.prepare("SELECT count(*) n FROM review_jobs").first()).n,
+    98,
+  );
+  await pollSelfStore(ctx, store.id);
+  assert.deepEqual(pages, [0, 1, 2]);
+  assert.equal(
+    (await ctx.db.prepare("SELECT count(*) n FROM review_jobs").first()).n,
+    148,
+  );
+});

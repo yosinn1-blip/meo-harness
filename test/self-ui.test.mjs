@@ -71,7 +71,21 @@ test("all published help links resolve to same-origin human-readable guidance", 
     assert.ok((await res.text()).length > 200);
   }
 });
-test('self-service database failure does not suppress the existing KV scheduler',async()=>{
- const prefixes=[];const env={SELF_DB:{prepare(){throw new Error('fixture DB outage');}},STORES:{async list({prefix}){prefixes.push(prefix);return {keys:[]};}}};
- await worker.scheduled({},env,{});assert.deepEqual(prefixes,['pending:','store:']);
+test("self-service database failure does not suppress the existing KV scheduler", async () => {
+  const prefixes = [];
+  const env = {
+    SELF_DB: {
+      prepare() {
+        throw new Error("fixture DB outage");
+      },
+    },
+    STORES: {
+      async list({ prefix }) {
+        prefixes.push(prefix);
+        return { keys: [] };
+      },
+    },
+  };
+  await worker.scheduled({}, env, {});
+  assert.deepEqual(prefixes, ["pending:", "store:"]);
 });

@@ -121,3 +121,27 @@ test("reconnect cannot substitute another Google sub; expiry and denial never gr
     null,
   );
 });
+test("callback after disconnect cannot restore credentials or a session", async (t) => {
+  const { db } = await withD1(t);
+  await applySchema(db);
+  const f = await googleFixture();
+  const ctx = createSelfContext(fixtureEnv(db), { fetchImpl: f.fetchImpl });
+  await seedStore(ctx);
+  await seedGoogleCredential(ctx);
+  const s = await createSession(ctx, "alice");
+  const { authorizationUrl: url } = await startGoogle(ctx, startRequest(s), {
+    intent: "reconnect",
+    challenge: "x",
+  });
+  const code = await f.authorize(url);
+  const { disconnectStore } = await import(
+    "../../worker/self-service/lifecycle.mjs"
+  );
+  await disconnectStore(ctx, { sub: "alice" });
+  await assert.rejects(() => finishGoogle(ctx, callback(url, code, s)));
+  assert.equal(
+    await db.prepare("SELECT * FROM google_credentials").first(),
+    null,
+  );
+  assert.equal(await db.prepare("SELECT * FROM sessions").first(), null);
+});
