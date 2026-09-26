@@ -7,7 +7,14 @@
 
 **▶ 触れるデモ（登録不要・架空店舗）: https://yosinn1-blip.github.io/yoshiki-apps/demo.html**
 
-**現ステータス（2026-09-27）**: 試験運用中。GBP API の利用承認を取得し、口コミ取得 → AI下書き → LINE承認 → Google へ返信投稿の流れを本番環境で通しテスト済み。実店舗での利用はこれから。
+**現ステータス（2026-09-27）**: 自己登録機能はローカル実装済み・一般公開前です。Google接続 → 店舗選択 → LINE本人確認 → 利用開始 → 停止・切断を、隔離D1と架空プロバイダのブラウザE2Eで検証します。本番設定・公開は別の承認が必要です。
+
+既存の管理者支援版にはGBP API承認・本番通しテスト済みの過去記録がありますが、今回その外部環境を再確認したわけではなく、自己登録版の公開可否とは別です。
+
+- [店主向け使い方](docs/quickstart.md)
+- [AI向け導入ガイド](docs/ai-setup.md)
+- [自前運用](docs/self-hosting.md)（通常登録とは別）
+- [公開前チェック](docs/self-service-release.md)
 
 ## できること
 
@@ -22,7 +29,7 @@
 - 投稿（最新情報）の予約・繰り返し投稿
 - インサイト（表示回数・電話・経路検索）の蓄積と分析
 - 写真・Q&A の管理
-- 店舗の人が自分だけで始められる登録画面（今は管理者が一緒に設定する）
+- 自己登録版の本番接続確認と一般受付の公開（画面・APIはローカル実装済み）
 
 ## やらないこと（ポリシー）
 
@@ -38,11 +45,11 @@
                                Google に返信を投稿 ◀── オーナーが「承認して送信」
 ```
 
-- **Cloudflare Workers + KV + cron**（`worker/index.mjs`）
+- **Cloudflare Workers + KV（既存版）/ D1（自己登録版）+ cron**（`worker/index.mjs`）
 - **LINE Messaging API** — 通知と承認ボタン。店舗の人はボットを友だち追加して登録コード（`MEO-XXXXXX`）を送るだけで通知先に登録される
 - **GBP 公式 API** — OAuth（`business.manage`）で店舗オーナーが許可。店舗が1つなら自動で選択
 
-## 店舗をつなぐ流れ（試験運用中の手順）
+## 既存の管理者支援版で店舗をつなぐ流れ
 
 管理用エンドポイントは `X-Admin-Key` が必要です。
 
@@ -58,8 +65,11 @@
 ## 開発
 
 ```bash
-npm test          # node --test
-npx wrangler dev  # ローカル実行
+npm ci
+npm test
+npm run test:self-runtime
+npm run build:self-test
+npm run test:e2e   # 専用Chrome for Testingが必要・外部通信なし
 ```
 
 必要な Worker Secrets は `worker/index.mjs` 冒頭のコメントを参照してください。
