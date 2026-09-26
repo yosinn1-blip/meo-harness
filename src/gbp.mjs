@@ -2,9 +2,9 @@
 //
 // 必要な OAuth2 スコープ: https://www.googleapis.com/auth/business.manage
 //
-// 旧 mybusiness.googleapis.com/v4 は非推奨（2023年末に廃止）。
-// 現行 sub-API を使用:
-//   口コミ: mybusinessreviews.googleapis.com/v1
+// 口コミは今も v4（mybusiness.googleapis.com/v4）のみ。v1 の口コミ API は存在しない
+// （mybusinessreviews.googleapis.com は 404。2026-09-27 実機確認・公式 review-data ドキュメントも v4）。
+// 店舗情報・アカウントは v1 サブ API:
 //   店舗情報: mybusinessbusinessinformation.googleapis.com/v1
 //   アカウント: mybusinessaccountmanagement.googleapis.com/v1
 //
@@ -18,7 +18,7 @@
 //   GBP_OAUTH_CLIENT_SECRET
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const GBP_REVIEWS_BASE = 'https://mybusinessreviews.googleapis.com/v1';
+const GBP_REVIEWS_BASE = 'https://mybusiness.googleapis.com/v4';
 const GBP_ACCOUNTS_BASE = 'https://mybusinessaccountmanagement.googleapis.com/v1';
 const GBP_LOCATIONS_BASE = 'https://mybusinessbusinessinformation.googleapis.com/v1';
 const GBP_STARS = { ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 };

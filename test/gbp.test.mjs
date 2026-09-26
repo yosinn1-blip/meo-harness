@@ -131,7 +131,7 @@ test('postGbpReply: URL に v1 Reviews サブ API が含まれる', async () => 
     accessToken: 'tok', accountId: 'accounts/1', locationId: 'locations/2',
     reviewId: 'r1', comment: 'test', fetchImpl: spyFetch,
   });
-  assert.ok(capturedUrl.includes('mybusinessreviews.googleapis.com/v1'), `URL should use v1 sub-API, got: ${capturedUrl}`);
+  assert.ok(capturedUrl.includes('mybusiness.googleapis.com/v4/'), `URL should use v4 reviews API, got: ${capturedUrl}`);
 });
 
 // ── listGbpAccounts ───────────────────────────────────────────────────────────
