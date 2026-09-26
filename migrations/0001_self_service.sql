@@ -47,7 +47,7 @@ CREATE TABLE review_jobs (
  payload_ciphertext TEXT, lease_id TEXT, lease_until INTEGER,
  attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL,
  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
- UNIQUE(store_id,review_id,review_version)
+ UNIQUE(store_id,review_id,review_version,generation)
 );
 CREATE TABLE replies (
  id TEXT PRIMARY KEY, job_id TEXT NOT NULL UNIQUE, store_id TEXT NOT NULL,

@@ -80,6 +80,7 @@ export function normalizeGbpReview(raw) {
     text: raw.comment ?? '',
     name: raw.reviewer?.displayName,
     createTime: raw.createTime,
+    updateTime: raw.updateTime,
     hasReply: Boolean(raw.reviewReply),
     platform: 'gbp',
   };
