@@ -100,3 +100,4 @@ CREATE TRIGGER reservation_release AFTER UPDATE OF state ON usage_reservations
 WHEN NEW.state='released' AND OLD.state<>'released'
 BEGIN UPDATE usage_budgets SET used=MAX(0,used-NEW.units) WHERE scope=NEW.scope AND period=NEW.period AND kind=NEW.kind; END;
 CREATE TABLE mutation_guards(ok INTEGER NOT NULL CHECK(ok=1));
+CREATE TABLE line_events(event_id TEXT PRIMARY KEY,created_at INTEGER NOT NULL);

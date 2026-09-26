@@ -19,7 +19,8 @@ export function buildReviewBubble({ replyId, review, bizName }) {
   // 承認する前に全文を読めるよう、口コミも返信案も実質切らない（Flex の容量上限への保険だけ残す）
   const reviewText = truncate(review.text, 1000);
   const draftText = truncate(review.draft ?? '', 1500);
-  const hasReplyId = Boolean(replyId);
+  const needsFullDraft = Boolean(review.fullTextUrl && (review.draft ?? '').length > 1500);
+  const hasReplyId = Boolean(replyId) && !needsFullDraft;
 
   const footerContents = hasReplyId
     ? [
@@ -44,6 +45,11 @@ export function buildReviewBubble({ replyId, review, bizName }) {
           action: { type: 'postback', label: '確認済み', data: `skip:${replyId ?? 'none'}` },
         },
       ];
+
+  if (review.fullTextUrl && /^https:\/\//.test(review.fullTextUrl) && (needsFullDraft || (review.text ?? '').length > 1000)) {
+    if (needsFullDraft) footerContents.length = 0;
+    footerContents.push({type:'button',style:'link',height:'sm',action:{type:'uri',label:'全文を確認',uri:review.fullTextUrl}});
+  }
 
   return {
     type: 'bubble',

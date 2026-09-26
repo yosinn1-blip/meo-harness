@@ -96,3 +96,9 @@ test('buildFlexPayload: 5通でも収まらない分は「ほか N件」にま�
   assert.equal(last.length, 10);
   assert.match(last[9].body.contents[0].text, /ほか 4件/);
 });
+
+test('self-service never approves a truncated draft and includes private full-review link',()=>{
+ const bubble=buildReviewBubble({replyId:'ss_test',review:{star:5,text:'長'.repeat(1100),draft:'😀'.repeat(800),fullTextUrl:'https://meo.test/account/replies/ss_test'}});
+ assert.equal(JSON.stringify(bubble).includes('approve:ss_test'),false);
+ assert.ok(JSON.stringify(bubble).includes('/account/replies/ss_test'));
+});
