@@ -147,7 +147,7 @@ export const SELF_COOKIE = '__Host-meo_session';
 
 **Interfaces:** `config.mjs` が `readSelfConfig(env) -> {registrationEnabled,processingEnabled,configured,limits}`、`createSelfContext(env,{now=Date.now,fetchImpl=fetch}={}) -> Ctx` をexport。test helperが `withD1(t) -> Promise<{db,mf}>` と `fixtureEnv(db,overrides={}) -> env` をexport。D1 helper は毎回空 DB を作り、`t.after` で dispose。
 
-- [ ] **Step 1: 次の失敗テストを書く。**
+- [x] **Step 1: 次の失敗テストを書く。**
 
 ```js
 import {test} from 'node:test';
@@ -161,8 +161,8 @@ test('設定省略は無制限でなく閉じる', () => {
 });
 ```
 
-- [ ] **Step 2: `node --test test/self-config.test.mjs` で未実装による FAIL を記録。**
-- [ ] **Step 3: config は非負整数のみ受理し、負数・NaN・空値を拒否。flag は文字列 `true` だけを true とする。**
+- [x] **Step 2: `node --test test/self-config.test.mjs` で未実装による FAIL を記録。**
+- [x] **Step 3: config は非負整数のみ受理し、負数・NaN・空値を拒否。flag は文字列 `true` だけを true とする。**
 
 ```js
 function nonNegativeInteger(value) {
@@ -204,8 +204,8 @@ export function fixtureEnv(db,overrides={}) {
 
 `fixtureEnv` は test 配下だけで利用し、本番コードからimportしない。configの受付可否と処理可否を分け、受付OFFや店舗枠満了が既存店舗の停止画面を無効にしない。
 
-- [ ] **Step 4: config の flag/整数境界テスト、D1 `SELECT 1`、既存 `npm test` を実行。** `.dev.vars` を helper が読まないことをコードで確認。
-- [ ] **Step 5: この Task のファイルのみ commit。** `git commit -m "test: add isolated self-service runtime harness"`
+- [x] **Step 4: config の flag/整数境界テスト、D1 `SELECT 1`、既存 `npm test` を実行。** `.dev.vars` を helper が読まないことをコードで確認。
+- [x] **Step 5: この Task のファイルのみ commit。** `git commit -m "test: add isolated self-service runtime harness"`
 
 ### Task 2: D1 スキーマと店舗の一意予約
 
@@ -213,7 +213,7 @@ export function fixtureEnv(db,overrides={}) {
 
 **Interfaces:** Produces `applySchema(db)` と `seedStore(ctx,{sub,state,lineUserId}) -> Store`（test helper）、`claimLocation(ctx,{sub,accountId,locationId,title}) -> Store`、`findOwnedStore(ctx,sub) -> Store|null`、`reserveLegacyLocations(ctx,rows) -> {count}`。`rows` は `{storeId,locationId}` だけ、token を含めない。
 
-- [ ] **Step 1: 同時登録を実 D1 で試す。**
+- [x] **Step 1: 同時登録を実 D1 で試す。**
 
 ```js
 test('同じ location は別 owner から同時登録できない', async t => {
@@ -226,8 +226,8 @@ test('同じ location は別 owner から同時登録できない', async t => {
 });
 ```
 
-- [ ] **Step 2: `node --test test/self-runtime/store-repository.test.mjs` → FAIL。**
-- [ ] **Step 3: SQL を用意し、最小 repository を実装。**
+- [x] **Step 2: `node --test test/self-runtime/store-repository.test.mjs` → FAIL。**
+- [x] **Step 3: SQL を用意し、最小 repository を実装。**
 
 ```sql
 PRAGMA foreign_keys = ON;
@@ -332,8 +332,8 @@ export async function seedStore(ctx,{sub='alice',state='active',lineUserId='line
 }
 ```
 
-- [ ] **Step 4: 同一 owner 再送、別 owner、legacy 予約衝突、片方失敗時 rollback、部分ページ移行をテスト。**
-- [ ] **Step 5: `git commit -m "feat: add transactional self-service ownership storage"`。**
+- [x] **Step 4: 同一 owner 再送、別 owner、legacy 予約衝突、片方失敗時 rollback、部分ページ移行をテスト。**
+- [x] **Step 5: `git commit -m "feat: add transactional self-service ownership storage"`。**
 
 ### Task 3: 暗号・セッション・CSRF・受付保護
 
@@ -341,7 +341,7 @@ export async function seedStore(ctx,{sub='alice',state='active',lineUserId='line
 
 **Interfaces:** Produces `seal(text,key,context)` / `unseal(envelope,key,context)`、`sha256(text)`、`createSession(ctx,sub|null)`、`requireActor(ctx,request)`、`requireMutation(ctx,request)`、`verifyChallenge(ctx,{token,ip,action})`、`consumeRate(ctx,{bucket,limit,windowMs})`。Session 出力は `{cookie,csrf,sessionHash}`。
 
-- [ ] **Step 1: 暗号の用途混同と cookie/CSRF の失敗を固定。**
+- [x] **Step 1: 暗号の用途混同と cookie/CSRF の失敗を固定。**
 
 ```js
 test('token を別 owner に移して復号できない', async () => {
@@ -370,8 +370,8 @@ test('24時間ちょうどで旧セッションを拒否',async t=>{
 });
 ```
 
-- [ ] **Step 2: 対象 Node/runtime テストを実行し、未実装 FAIL を確認。**
-- [ ] **Step 3: Web Crypto AES-GCM、256-bit key、96-bit fresh IV、AAD に context と key version。**
+- [x] **Step 2: 対象 Node/runtime テストを実行し、未実装 FAIL を確認。**
+- [x] **Step 3: Web Crypto AES-GCM、256-bit key、96-bit fresh IV、AAD に context と key version。**
 
 ```js
 const aad = new TextEncoder().encode(`v1:${context}`);
@@ -387,8 +387,8 @@ Turnstile は Siteverify の `success`、正しい hostname、action=`self_start
 IP は毎日変える HMAC の bucket だけ保存。start は IP 10回/10分、LINEコード発行は owner 5回/10分、各 API は owner 60回/分。
 rate increment は `INSERT ... ON CONFLICT ... DO UPDATE ... WHERE used < ? RETURNING used`、expiry の更新も同一 statement で行う。
 
-- [ ] **Step 4: 同時制限、未設定 Secret、oversized chunked body、24h境界、期限切れCookie、CSRFなし、偽Turnstile hostname/action をテスト。**
-- [ ] **Step 5: `git commit -m "feat: protect self-service sessions and mutations"`。**
+- [x] **Step 4: 同時制限、未設定 Secret、oversized chunked body、24h境界、期限切れCookie、CSRFなし、偽Turnstile hostname/action をテスト。**
+- [x] **Step 5: `git commit -m "feat: protect self-service sessions and mutations"`。**
 
 ### Task 4: Google OIDC と再ログイン
 
@@ -397,7 +397,7 @@ rate increment は `INSERT ... ON CONFLICT ... DO UPDATE ... WHERE used < ? RETU
 **Interfaces:** Produces `startGoogle(ctx,request,{intent,challenge}) -> {authorizationUrl}`、`finishGoogle(ctx,request) -> Response`、`verifyGoogleIdToken(token,{jwks,clientId,nonce,now}) -> {sub}`、`googleAccessToken(ctx,sub) -> string`。
 `self-google.mjs` は fixture 用 RSA keypair/JWKS と署名済 ID token、固定 provider 応答を生成する。私有鍵はメモリ内のみ。`seedGoogleCredential(ctx,sub)` もここからexportする。
 
-- [ ] **Step 1: nonce と署名の検証を試す。**
+- [x] **Step 1: nonce と署名の検証を試す。**
 
 ```js
 import {generateKeyPair,exportJWK,SignJWT} from 'jose';
@@ -414,8 +414,8 @@ test('正しい署名でも別nonceなら拒否', async () => {
 });
 ```
 
-- [ ] **Step 2: `node --test test/self-oauth.test.mjs` → FAIL。**
-- [ ] **Step 3: 固定の Google discovery/JWKS/token URLs だけへ fetch。JWT 検証は `jose`。**
+- [x] **Step 2: `node --test test/self-oauth.test.mjs` → FAIL。**
+- [x] **Step 3: 固定の Google discovery/JWKS/token URLs だけへ fetch。JWT 検証は `jose`。**
 
 ```js
 const {payload}=await jwtVerify(token,createLocalJWKSet(jwks),{
@@ -446,8 +446,8 @@ export async function seedGoogleCredential(ctx,sub) {
 }
 ```
 
-- [ ] **Step 4: 改ざん署名、issuer/aud/exp/azp、別ブラウザstate、state再送、拒否callback、loginがcredentialを消さない、別人reconnect拒否を実行。**
-- [ ] **Step 5: `git commit -m "feat: add Google self-service sign-in and reconnect"`。**
+- [x] **Step 4: 改ざん署名、issuer/aud/exp/azp、別ブラウザstate、state再送、拒否callback、loginがcredentialを消さない、別人reconnect拒否を実行。**
+- [x] **Step 5: `git commit -m "feat: add Google self-service sign-in and reconnect"`。**
 
 ### Task 5: Google 店舗選択と秘密を返さない status API
 
@@ -456,7 +456,7 @@ export async function seedGoogleCredential(ctx,sub) {
 **Interfaces:** Produces `discoverLocations(ctx,actor,{cursor=null}={}) -> {locations,nextCursor,partial}`、`selectLocation(ctx,actor,{accountId,locationId}) -> Store`、`getSelfStatus(ctx,request) -> object`、`handleSelfRequest(request,env,ctx) -> Response|null`。
 GBP に `listGbpAccountsPage({accessToken,pageToken,fetchImpl})` / `listGbpLocationsPage({accessToken,accountId,pageToken,fetchImpl})` / `fetchGbpReviewsPage({accessToken,accountId,locationId,pageToken,pageSize,fetchImpl})` を追加。戻り値は `{items,nextPageToken}`、既存配列返却関数は互換維持。
 
-- [ ] **Step 1: 一覧になかった店舗 ID の注入を拒否。**
+- [x] **Step 1: 一覧になかった店舗 ID の注入を拒否。**
 
 ```js
 test('一覧に存在しない店舗は確定しない', async t => {
@@ -479,8 +479,8 @@ test('一覧に存在しない店舗は確定しない', async t => {
 
 対照テストでは同じfixtureの `locations/2` を選ぶと成功することを確認する。認証失敗で常に拒否するだけの実装を通さない。
 
-- [ ] **Step 2: 対象 runtime テスト → FAIL。**
-- [ ] **Step 3: ページングの契約を追加し、選択時は provider で再確認してから claim。**
+- [x] **Step 2: 対象 runtime テスト → FAIL。**
+- [x] **Step 3: ページングの契約を追加し、選択時は provider で再確認してから claim。**
 
 ```js
 export async function fetchGbpReviewsPage({accessToken,accountId,locationId,pageToken,
@@ -501,8 +501,8 @@ export async function fetchGbpReviewsPage({accessToken,accountId,locationId,page
 候補が多い場合はページ継続ボタン。cursorはhashを `location_cursors` に保存し、owner-boundなページ情報を暗号化して10分で失効。外部URLは保存/利用しない。
 status は明示した whitelist のみ組み立てる。credential、token、lineUserId、他人の owner、SQL row 全体を spread しない。
 
-- [ ] **Step 4: 0/1/複数・第2ページ・一部403・API500・owner差し替え・status秘密非表示・既存GBPテストを実行。**
-- [ ] **Step 5: `git commit -m "feat: add owned Google location selection"`。**
+- [x] **Step 4: 0/1/複数・第2ページ・一部403・API500・owner差し替え・status秘密非表示・既存GBPテストを実行。**
+- [x] **Step 5: `git commit -m "feat: add owned Google location selection"`。**
 
 ### Task 6: LINE 登録、確認番号、既存承認の本人照合
 
@@ -511,7 +511,7 @@ status は明示した whitelist のみ組み立てる。credential、token、li
 **Interfaces:** Produces `issueLineCode(ctx,actor)`、`consumeLineCode(ctx,event)`、`sendLineCheck(ctx,actor)`、`verifyLinePin(ctx,actor,pin)`、`authorizeLineActor({source,registeredUserId,active}) -> boolean`。
 LINE API transport は `fetchImpl` を受ける。新 code は `MEOS-` + 12文字、reply IDs は `ss_`。
 
-- [ ] **Step 1: 他人の LINE とグループを拒否する。**
+- [x] **Step 1: 他人の LINE とグループを拒否する。**
 
 ```js
 test('正しいpostback IDでも他人のLINEは不可',()=>{
@@ -522,8 +522,8 @@ test('正しいpostback IDでも他人のLINEは不可',()=>{
 });
 ```
 
-- [ ] **Step 2: unit/runtime を実行して FAIL。**
-- [ ] **Step 3: link/PIN は hash 保存・原子的消費。**
+- [x] **Step 2: unit/runtime を実行して FAIL。**
+- [x] **Step 3: link/PIN は hash 保存・原子的消費。**
 
 ```sql
 UPDATE line_links SET consumed_at=?
@@ -538,8 +538,8 @@ Webhook は 256 KiB 上限、署名 Secret なし/不一致を 401、JSON 不正
 legacy の approve/skip は reply を読む→store を読む→userId一致と1対1を確認→操作、の順に変更。未登録や不明な状態は拒否。
 既存 store に state がない場合は legacy 稼働扱いとし、削除済み store は拒否。新店舗では state=active のみ許可。
 
-- [ ] **Step 4: 同時コード消費1回、再発行失効、期限境界、PIN5回失敗、別ブラウザ/owner、署名なし、skipの本人照合、旧登録コードの回帰を実行。**
-- [ ] **Step 5: `git commit -m "feat: verify LINE ownership before enabling replies"`。**
+- [x] **Step 4: 同時コード消費1回、再発行失効、期限境界、PIN5回失敗、別ブラウザ/owner、署名なし、skipの本人照合、旧登録コードの回帰を実行。**
+- [x] **Step 5: `git commit -m "feat: verify LINE ownership before enabling replies"`。**
 
 ### Task 7: 予算予約・稼働開始・停止・切断・保存期間
 
@@ -547,7 +547,7 @@ legacy の approve/skip は reply を読む→store を読む→userId一致と1
 
 **Interfaces:** Produces `reserveUsage(ctx,{id,scope,period,kind,units}) -> Result`、`reserveUsageBatch(ctx,reservations) -> Result`（同じ引数形の配列を全件原子的に予約）、`settleUsage(ctx,id,outcome)`（outcome=`committed/released/uncertain`）、`activateStore(ctx,actor,{termsVersion,confirmed})`、`pauseStore(ctx,actor)`、`disconnectStore(ctx,actor)`、`purgeExpired(ctx)`。予約の `kind` は `active/draft/push/reply`、active枠だけ `period='lifetime'`。
 
-- [ ] **Step 1: 上限最後の1枠への同時アクセスを固定。**
+- [x] **Step 1: 上限最後の1枠への同時アクセスを固定。**
 
 ```js
 test('残り1枠を二重予約しない', async t=>{
@@ -561,8 +561,8 @@ test('残り1枠を二重予約しない', async t=>{
 });
 ```
 
-- [ ] **Step 2: runtime test → FAIL。**
-- [ ] **Step 3: conditional INSERT + trigger で多重消費を防ぐ。**
+- [x] **Step 2: runtime test → FAIL。**
+- [x] **Step 3: conditional INSERT + trigger で多重消費を防ぐ。**
 
 ```sql
 CREATE TRIGGER reservation_within_budget BEFORE INSERT ON usage_reservations
@@ -602,8 +602,8 @@ active 枠は pause で保持し、disconnect で返す。reconnect/resume は�
 同じボットを別サービスが使うため、保証できるのは本機能の予算内停止と provider quota の尊重であり、外部サービスの予約制御ではない。
 retention は LIMIT 100 のバッチ削除。未完了24h、本文7日、監査30日を固定。本文期限後も重複送信を防ぐ最小の口コミID/version/処理結果を利用中だけ保持し、切断時には消す。通知payloadと期限切れcursorも対象にする。
 
-- [ ] **Step 4: 同ID再送、複数scope枠のrollback、月末JST、provider quota不明、停止と予約競合、切断後callback/LINE無効、保持期間を実行。**
-- [ ] **Step 5: `git commit -m "feat: bound self-service usage and lifecycle"`。**
+- [x] **Step 4: 同ID再送、複数scope枠のrollback、月末JST、provider quota不明、停止と予約競合、切断後callback/LINE無効、保持期間を実行。**
+- [x] **Step 5: `git commit -m "feat: bound self-service usage and lifecycle"`。**
 
 ### Task 8: ページング付き取得・AI 生成・日次通知
 
@@ -612,7 +612,7 @@ retention は LIMIT 100 のバッチ削除。未完了24h、本文7日、監査3
 **Interfaces:** Produces `pollSelfStore(ctx,storeId)`、`processSelfJobs(ctx,{limit:5})`、`sendSelfDigest(ctx,storeId)`、`remainingPushBudget({localRemaining,providerRemaining,legacyReserve}) -> number`、`claimJob(ctx,{id,stage,leaseMs})`、`finishJob(ctx,{id,leaseId,stage})`。
 Job stage は `fetched/drafting/draft_ready/notifying/notified/posting/post_unknown/posted/skipped/expired/blocked`、失敗の再試行は元 stage と `next_attempt_at` で管理。
 
-- [ ] **Step 1: quota停止で口コミが失われないことを固定。**
+- [x] **Step 1: quota停止で口コミが失われないことを固定。**
 
 ```js
 test('生成枠0ではjobを残してAIを呼ばない',async t=>{
@@ -644,8 +644,8 @@ test('共有ボットの外部消費と残量不明を安全側で扱う',()=>{
 });
 ```
 
-- [ ] **Step 2: runtime test → FAIL。**
-- [ ] **Step 3: ページ単位の job INSERT と cursor 前進を一つの batch にする。**
+- [x] **Step 2: runtime test → FAIL。**
+- [x] **Step 3: ページ単位の job INSERT と cursor 前進を一つの batch にする。**
 
 ```sql
 UPDATE review_jobs SET stage=?,lease_id=?,lease_until=?,attempts=attempts+1
@@ -660,8 +660,8 @@ UPDATE review_jobs SET stage=?,lease_id=?,lease_until=?,attempts=attempts+1
 LINEの初回pushから `X-Line-Retry-Key` を付ける。409は `x-line-accepted-request-id` のある再送応答のみ受理済みとして記録し、200も実到達とは区別する。初回から24時間超の結果不明は自動再送せず保留する。reply APIにはretry headerを付けない。
 毎日JST9時、既存cronから呼び出す。遅延実行でも同日のdigestを重複生成しない。
 
-- [ ] **Step 4: 51件/複数ページ、境界60日、AI失敗、LINE timeout後retry-key、DB失敗後再開、外部quota消費、生成/通知で停止をそれぞれ実行。**
-- [ ] **Step 5: `git commit -m "feat: add bounded review processing for self-service stores"`。**
+- [x] **Step 4: 51件/複数ページ、境界60日、AI失敗、LINE timeout後retry-key、DB失敗後再開、外部quota消費、生成/通知で停止をそれぞれ実行。**
+- [x] **Step 5: `git commit -m "feat: add bounded review processing for self-service stores"`。**
 
 ### Task 9: 承認投稿と「結果不明」の回復
 
@@ -669,7 +669,7 @@ LINEの初回pushから `X-Line-Retry-Key` を付ける。409は `x-line-accepte
 
 **Interfaces:** Produces `handleSelfPostback(ctx,event)`、`reconcileReply(ctx,replyId)`、`classifyCurrentReview({current,approvedDraft,storedReviewVersionTime}) -> posted/conflict/unchanged`、`readOwnedReply(ctx,actor,replyId) -> {reviewText,draftText,expiresAt}`、GBP の `getGbpReview({accessToken,accountId,locationId,reviewId,fetchImpl}) -> raw review`。
 
-- [ ] **Step 1: 他人からの approve/skip と、停止後の古いボタンを拒否。**
+- [x] **Step 1: 他人からの approve/skip と、停止後の古いボタンを拒否。**
 
 ```js
 test('停止中はapproveでもGoogle投稿ゼロ',async t=>{
@@ -692,8 +692,8 @@ test('停止中はapproveでもGoogle投稿ゼロ',async t=>{
 });
 ```
 
-- [ ] **Step 2: runtime test → FAIL。**
-- [ ] **Step 3: 本人→状態/世代→期限→Google現行口コミ→原子的lease→再状態確認→PUT の順に実装。**
+- [x] **Step 2: runtime test → FAIL。**
+- [x] **Step 3: 本人→状態/世代→期限→Google現行口コミ→原子的lease→再状態確認→PUT の順に実装。**
 
 ```js
 const current=await getGbpReview(args);
@@ -720,8 +720,8 @@ GoogleへのPUTは既存 `postGbpReply` を利用。HTTP失敗と transport結�
 LINEに表示できる本文長を超えるdraftは、ボタンを付けず「全文を確認してください」と表示。勝手に切り詰めた本文を承認対象にしない。
 今回の生成上限は返信1200文字とし、長すぎる生成結果はdraftエラーで再生成候補へ。口コミ全文が長すぎる場合は確認画面への自分専用リンクで読む。
 
-- [ ] **Step 4: 手動返信との競合、レビュー編集、同時承認、PUT後DB失敗、タイムアウト後同文/異文、skip偽装、長文/絵文字を実行。**
-- [ ] **Step 5: `git commit -m "feat: reconcile owner-approved Google replies safely"`。**
+- [x] **Step 4: 手動返信との競合、レビュー編集、同時承認、PUT後DB失敗、タイムアウト後同文/異文、skip偽装、長文/絵文字を実行。**
+- [x] **Step 5: `git commit -m "feat: reconcile owner-approved Google replies safely"`。**
 
 ### Task 10: 同一オリジン画面とルーティング統合
 
@@ -730,7 +730,7 @@ LINEに表示できる本文長を超えるdraftは、ボタンを付けず「�
 **Interfaces:** Produces `serveSelfPage(request,ctx) -> Response|null`。browser は上記 HTTP 契約だけを使い、管理 API を呼ばない。
 UIを実装する前に適用される frontend-design skill を読み、既存サイトの青/白・日本語案内と整合させる。
 
-- [ ] **Step 1: セキュリティヘッダと管理キー非出力を固定。**
+- [x] **Step 1: セキュリティヘッダと管理キー非出力を固定。**
 
 ```js
 test('開始画面は秘密を含まずno-store',async()=>{
@@ -743,8 +743,8 @@ test('開始画面は秘密を含まずno-store',async()=>{
 });
 ```
 
-- [ ] **Step 2: unit/browser で FAIL を確認。**
-- [ ] **Step 3: 画面を作り、明示ルートのみ配信。**
+- [x] **Step 2: unit/browser で FAIL を確認。**
+- [x] **Step 3: 画面を作り、明示ルートのみ配信。**
 
 ```html
 <main>
@@ -780,8 +780,8 @@ entrypointではself pathを早期dispatchし、LINE新prefixとscheduled D1処�
 旧signupは自己登録公開モードで410と案内URL。legacy管理者の新規/選択にもlocation予約を通す。
 wrangler既存互換日付は保持。D1本番bindingはまだ作らず、ローカル専用設定で検証する。実際の本番変更はrelease gate。
 
-- [ ] **Step 4: 375px/1280px、キーボード操作、再読込、期限切れ、Google拒否、口コミゼロ、閉鎖時login/pause可能を実行。**
-- [ ] **Step 5: `git commit -m "feat: add self-service onboarding and account screens"`。**
+- [x] **Step 4: 375px/1280px、キーボード操作、再読込、期限切れ、Google拒否、口コミゼロ、閉鎖時login/pause可能を実行。**
+- [x] **Step 5: `git commit -m "feat: add self-service onboarding and account screens"`。**
 
 ### Task 11: 通信ゼロのブラウザ E2E と案内文書
 
@@ -790,7 +790,7 @@ wrangler既存互換日付は保持。D1本番bindingはまだ作らず、ロー
 **Interfaces:** Produces `startTestApp() -> {baseURL,providerFixtureURL,stop}`（loopback限定）、fixtureはGoogle認可画面/署名付きtoken/LINE番号/GBP口コミをローカルで模擬。
 実productionのendpointを変えるenvフラグを作らず、test entrypointに依存注入して差し替える。
 
-- [ ] **Step 1: browser が管理 API を使わず完走するテストを書く。**
+- [x] **Step 1: browser が管理 API を使わず完走するテストを書く。**
 
 ```js
 test('初回導入は管理者操作なしで完走',async({page})=>{
@@ -816,8 +816,8 @@ test('初回導入は管理者操作なしで完走',async({page})=>{
 
 packageに `"test:e2e":"playwright test"` を追加し、configのbaseURLを `startTestApp()` の返却値へ固定する。CFT実行ファイルは専用インストールを検出して使い、個人Chromeのプロファイルを使わない。`__Host-` Cookieを弱めずにテストするためloopback HTTPSを使い、自己署名証明書の許可は当該test contextだけに限定する。
 
-- [ ] **Step 2: `npm run test:e2e` を実行し、導線未完成で FAIL を確認。**
-- [ ] **Step 3: CFT専用プロファイルとloopbackのみ許可する実行補助を実装し、文書を作る。**
+- [x] **Step 2: `npm run test:e2e` を実行し、導線未完成で FAIL を確認。**
+- [x] **Step 3: CFT専用プロファイルとloopbackのみ許可する実行補助を実装し、文書を作る。**
 
 ```js
 await context.route('**/*',route=>{
@@ -832,8 +832,8 @@ quickstartは画面名/手順/権限/停止、ai-setupは同じ状態codeと禁�
 READMEは「ローカル実装済み・一般公開前」など検証した段階だけ記載。記事に即時利用可と書くのは公開gate後。
 自前運用の実行例は `npm ci` → `npm test` →ローカル起動→接続検証の順で、認証値はSecret管理を案内。第三者repoへFull Accessを推奨しない。
 
-- [ ] **Step 4: 中断復帰/店0/複数/別LINE/PIN期限/枠不足/停止・切断/長文/実投稿ゼロ、docsのリンクとroute表の一致をテスト。**
-- [ ] **Step 5: `git commit -m "docs: add human and AI setup guides with onboarding E2E"`。**
+- [x] **Step 4: 中断復帰/店0/複数/別LINE/PIN期限/枠不足/停止・切断/長文/実投稿ゼロ、docsのリンクとroute表の一致をテスト。**
+- [x] **Step 5: `git commit -m "docs: add human and AI setup guides with onboarding E2E"`。**
 
 ### Task 12: 統合レビュー、公開前チェック、引き渡し
 
@@ -843,7 +843,7 @@ READMEは「ローカル実装済み・一般公開前」など検証した段�
 `check-self-release` は読み取り専用。deploy/Secret変更/課金操作を絶対に呼ばない。
 exportのimportではCLIを実行しない。`import.meta.url===pathToFileURL(process.argv[1]).href` のときだけ引数処理し、証跡ファイル欠落もblocked/終了コード1とする。
 
-- [ ] **Step 1: 未確認の実接続を公開可としないテストを書く。**
+- [x] **Step 1: 未確認の実接続を公開可としないテストを書く。**
 
 ```js
 test('local E2E成功だけでは一般公開不可',()=>{
@@ -855,8 +855,8 @@ test('local E2E成功だけでは一般公開不可',()=>{
 });
 ```
 
-- [ ] **Step 2: `node --test test/self-release.test.mjs` → FAIL。**
-- [ ] **Step 3: gateを明示条件で実装。**
+- [x] **Step 2: `node --test test/self-release.test.mjs` → FAIL。**
+- [x] **Step 3: gateを明示条件で実装。**
 
 ```js
 const required={
@@ -879,7 +879,7 @@ Secretや資格情報の変更とremote DB作成は、対象を示して別途�
 公開版bundleに `/fixture/`、固定PIN、test用鍵、認証迂回フラグが入っていないことをスキャンする。
 安全停止は新規受付OFF/新規処理OFF、account停止・切断は維持。D1移行を破棄するrollbackを自動実行しない。
 
-- [ ] **Step 4: 全検証をraw exit付きで実行。**
+- [x] **Step 4: 全検証をraw exit付きで実行。**
 
 ```bash
 npm test
@@ -895,7 +895,7 @@ git diff --check
 全差分、トークン保存、ID照合、停止後投稿、残量超過、legacy回帰をCodexがレビューする。
 新たな重大問題は原因→失敗テスト→修正→再テストの順。初回美容院の試用まで一般公開を待たせるのではなく、公開gate固有の不足だけを提示する。
 
-- [ ] **Step 5: `git commit -m "test: verify self-service readiness and release gates"`。**
+- [x] **Step 5: `git commit -m "test: verify self-service readiness and release gates"`。**
 レビュー済みworktreeをmainへ採用する場合はgit merge/cherry-pickのみ。サイト側の既存変更の状態を再確認して入口リンクを統合し、公開は別途確認する。
 
 ---
@@ -918,9 +918,9 @@ git diff --check
 表のタスク間接口は本書の関数名に統一。返却がnullになるケースを呼出側で扱う。
 本文中のfixtureキー・PINは架空。Secretsを検証ログへ混ぜない。
 
-## 実行承認待ち
+## 実行状況
 
-この計画の内容確認後、`executing-plans` で順に実装する。計画作成ターンでは依存インストール・商品コード変更・外部設定変更は行わない。
+2026-09-27の承認後、`executing-plans`で隔離ブランチに実装・ローカル検証。外部設定・main統合・一般公開は未実施。検証ログと判断は当該計画のSDD ledgerに保存。
 本番公開の承認は、実装を進める承認と分ける。
 
 ## 参照（2026-09-27確認）
