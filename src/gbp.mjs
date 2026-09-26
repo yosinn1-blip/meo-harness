@@ -103,6 +103,39 @@ export async function listGbpAccounts({ accessToken, fetchImpl }) {
 }
 
 /**
+ * 届いている招待（お店が運営者を「管理者」に招待したもの等）の一覧。
+ * @returns {Promise<Array<{name:string, role:string, targetType?:string, targetLocation?:{locationName:string,address?:string}}>>}
+ */
+export async function listGbpInvitations({ accessToken, accountId, fetchImpl }) {
+  const _fetch = fetchImpl ?? globalThis.fetch;
+  const res = await _fetch(`${GBP_ACCOUNTS_BASE}/${accountId}/invitations`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`GBP invitations 取得失敗 ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.invitations ?? [];
+}
+
+/** 招待を承認する。name は "accounts/…/invitations/…" 形式。 */
+export async function acceptGbpInvitation({ accessToken, name, fetchImpl }) {
+  if (!/^accounts\/\d+\/invitations\/[\w-]+$/.test(name ?? '')) throw new Error(`招待の name が不正です: ${name}`);
+  const _fetch = fetchImpl ?? globalThis.fetch;
+  const res = await _fetch(`${GBP_ACCOUNTS_BASE}/${name}:accept`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`GBP invitation 承認失敗 ${res.status}: ${body.slice(0, 200)}`);
+  }
+  return { ok: true, name };
+}
+
+/**
  * GBP ロケーション（店舗）一覧を取得する。
  * @param {object} args
  * @param {string} args.accessToken

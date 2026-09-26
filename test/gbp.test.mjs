@@ -239,3 +239,22 @@ test('isValidGbpIds: accounts/数字 と locations/数字 だけ通す', async (
   assert.equal(isValidGbpIds({ gbpAccountId: 'accounts/1' }), false);
   assert.equal(isValidGbpIds(), false);
 });
+
+test('listGbpInvitations: アカウントの招待一覧を返す', async () => {
+  const { listGbpInvitations } = await import('../src/gbp.mjs');
+  let url;
+  const fetchImpl = async (u) => { url = u; return new Response(JSON.stringify({ invitations: [{ name: 'accounts/1/invitations/abc', role: 'MANAGER' }] })); };
+  const inv = await listGbpInvitations({ accessToken: 't', accountId: 'accounts/1', fetchImpl });
+  assert.equal(url, 'https://mybusinessaccountmanagement.googleapis.com/v1/accounts/1/invitations');
+  assert.equal(inv[0].role, 'MANAGER');
+});
+
+test('acceptGbpInvitation: :accept に POST し、不正な name は送らない', async () => {
+  const { acceptGbpInvitation } = await import('../src/gbp.mjs');
+  const calls = [];
+  const fetchImpl = async (u, init) => { calls.push({ u, m: init.method }); return new Response('{}'); };
+  await acceptGbpInvitation({ accessToken: 't', name: 'accounts/1/invitations/abc-1', fetchImpl });
+  assert.deepEqual(calls, [{ u: 'https://mybusinessaccountmanagement.googleapis.com/v1/accounts/1/invitations/abc-1:accept', m: 'POST' }]);
+  await assert.rejects(acceptGbpInvitation({ accessToken: 't', name: 'accounts/1/../x', fetchImpl }));
+  assert.equal(calls.length, 1);
+});

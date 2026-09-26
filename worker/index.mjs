@@ -73,6 +73,9 @@ export default {
         if (method === 'POST') return await handleSignup(request, env);
       }
 
+      if (path === '/admin/operator/invitations' && method === 'GET') return await handleOperatorInvitations(request, env);
+      if (path === '/admin/operator/invitations/accept' && method === 'POST') return await handleOperatorInvitationAccept(request, env);
+
       if (path.startsWith('/admin/stores/')) {
         const rest = path.slice('/admin/stores/'.length);
         if (!rest) return jsonError('storeId is required in path', 400);
@@ -877,6 +880,33 @@ async function fetchLocationsByAccount(env, refreshToken) {
       return { account: { name: account.name, accountName: account.accountName }, locations };
     }),
   );
+}
+
+// ── 運営者アカウントに届いた招待（お店が運営者を GBP の管理者に招待したもの） ──
+
+async function operatorAccessToken(env) {
+  if (!env.GBP_REFRESH_TOKEN) throw new Error('運営者の GBP_REFRESH_TOKEN が未設定です');
+  const { getGbpAccessToken } = await import('../src/gbp.mjs');
+  return getGbpAccessToken({ clientId: env.GBP_OAUTH_CLIENT_ID, clientSecret: env.GBP_OAUTH_CLIENT_SECRET, refreshToken: env.GBP_REFRESH_TOKEN });
+}
+
+async function handleOperatorInvitations(request, env) {
+  if (!checkAdminAuth(request, env)) return jsonError('Unauthorized', 401);
+  const { listGbpAccounts, listGbpInvitations } = await import('../src/gbp.mjs');
+  const accessToken = await operatorAccessToken(env);
+  const accounts = await listGbpAccounts({ accessToken });
+  const invitations = (await Promise.all(accounts.map(a =>
+    listGbpInvitations({ accessToken, accountId: a.name }).catch(err => [{ error: err.message, account: a.name }])))).flat();
+  return json({ ok: true, invitations });
+}
+
+async function handleOperatorInvitationAccept(request, env) {
+  if (!checkAdminAuth(request, env)) return jsonError('Unauthorized', 401);
+  let body;
+  try { body = await request.json(); } catch { return jsonError('Invalid JSON body', 400); }
+  const { acceptGbpInvitation } = await import('../src/gbp.mjs');
+  const accessToken = await operatorAccessToken(env);
+  return json(await acceptGbpInvitation({ accessToken, name: body?.name }));
 }
 
 // 店舗の選択だけを書き足す。PUT /admin/stores/:id は全体を上書きするので、
