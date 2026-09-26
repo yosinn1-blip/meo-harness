@@ -281,7 +281,8 @@ async function processReviews(reviews, store, storeId, env) {
   // GBP 由来のレビューは reply:{uuid} エントリを作成してボタン付き Flex Message を送る
   const processedWithReplyIds = await Promise.all(
     processed.map(async review => {
-      if (!review.reviewId) return review;
+      // 下書きが無いと「承認して送信」で空の返信を投稿してしまうので、承認ボタンを出さない
+      if (!review.reviewId || !review.draft) return review;
       const replyId = crypto.randomUUID();
       await env.STORES.put(`reply:${replyId}`, JSON.stringify({
         storeId,

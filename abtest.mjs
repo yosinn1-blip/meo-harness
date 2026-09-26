@@ -9,7 +9,7 @@ const GEMINI_KEY = process.env.GEMINI_API_KEY;
 if (!GROQ_KEY) { console.error("GROQ_API_KEY 未設定"); process.exit(1); }
 if (!GEMINI_KEY) { console.error("GEMINI_API_KEY 未設定"); process.exit(1); }
 
-const GROQ_MODEL = "llama-3.3-70b-versatile";
+const GROQ_MODEL = "qwen/qwen3.8-27b";
 const GEMINI_MODEL = "gemini-2.5-flash";
 
 // 店舗設定（架空のヘアサロン）と返信方針

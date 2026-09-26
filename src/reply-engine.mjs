@@ -29,7 +29,7 @@ export const PROVIDERS = Object.freeze({
 });
 
 export const DEFAULT_MODELS = Object.freeze({
-  [PROVIDERS.GROQ]: "llama-3.3-70b-versatile",
+  [PROVIDERS.GROQ]: "qwen/qwen3.8-27b", // llama-3.3-70b-versatile は2026-09時点で提供終了（model_not_found）
   [PROVIDERS.GEMINI]: "gemini-2.5-flash", // 2.0系は無料枠0
   [PROVIDERS.WORKERS_AI]: "@cf/meta/llama-3.1-8b-instruct",
 });

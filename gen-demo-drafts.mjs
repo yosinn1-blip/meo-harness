@@ -6,7 +6,7 @@ import { writeFileSync } from "node:fs";
 
 const GROQ_KEY = process.env.GROQ_API_KEY;
 if (!GROQ_KEY) { console.error("GROQ_API_KEY 未設定"); process.exit(1); }
-const GROQ_MODEL = "llama-3.3-70b-versatile";
+const GROQ_MODEL = "qwen/qwen3.8-27b";
 
 const buildSystem = (bizType, bizName) => `あなたは${bizType}「${bizName}」のオーナーです。
 Googleビジネスプロフィールに届いたお客様の口コミに対する返信を書いてください。
