@@ -36,11 +36,18 @@ test('buildReviewBubble: draft がない場合 body に separator なし', () =>
   assert.equal(hasSeparator, false);
 });
 
-test('buildReviewBubble: 長い text は切り詰められる', () => {
-  const longReview = { star: 5, text: 'a'.repeat(200), name: '佐藤', draft: '返信' };
+test('buildReviewBubble: 承認前に全文を読めるよう、普通の長さの口コミと返信案は切らない', () => {
+  const review = { star: 5, text: 'a'.repeat(400), name: '佐藤', draft: 'b'.repeat(600) };
+  const json = JSON.stringify(buildReviewBubble({ replyId: 'x', review }));
+  assert.ok(json.includes('a'.repeat(400)));
+  assert.ok(json.includes('b'.repeat(600)));
+});
+
+test('buildReviewBubble: 極端に長い text は切り詰められる', () => {
+  const longReview = { star: 5, text: 'a'.repeat(3000), name: '佐藤', draft: '返信' };
   const bubble = buildReviewBubble({ replyId: 'x', review: longReview });
   const textEl = bubble.body.contents[0].contents[1];
-  assert.ok(textEl.text.length <= 85); // 80 + "…" + 「」
+  assert.ok(textEl.text.length <= 1005);
 });
 
 // ── buildFlexPayload ──────────────────────────────────────────────────────────

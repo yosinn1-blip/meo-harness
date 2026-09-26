@@ -414,8 +414,10 @@ async function handleLinePostback(event, env) {
   const replyRaw = await env.STORES.get(`reply:${replyId}`);
   if (!replyRaw) return;
 
-  await env.STORES.delete(`reply:${replyId}`);
-  if (action === 'skip') return;
+  if (action === 'skip') {
+    await env.STORES.delete(`reply:${replyId}`);
+    return;
+  }
 
   if (action === 'approve') {
     const reply = JSON.parse(replyRaw);
@@ -436,9 +438,11 @@ async function handleLinePostback(event, env) {
       await postGbpReply({ accessToken, accountId: gbpAccountId, locationId: gbpLocationId, reviewId, comment: draft });
     } catch (err) {
       // 押した人に何も返らないと、投稿されたと思い込むので失敗も LINE に返す
-      await pushLineText(store, userId, `❌ Google への返信投稿に失敗しました。\n${err.message.slice(0, 120)}`);
+      // 承認待ちデータは残すので、もう一度「承認して送信」を押せば再送できる（Google の返信は上書きなので二重投稿にはならない）
+      await pushLineText(store, userId, `❌ Google への返信投稿に失敗しました。時間をおいて、もう一度「承認して送信」を押してください。\n${err.message.slice(0, 120)}`);
       throw err;
     }
+    await env.STORES.delete(`reply:${replyId}`);
     await pushLineText(store, userId, '✅ Google に返信を投稿しました！');
   }
 }

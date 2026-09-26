@@ -16,8 +16,9 @@ function truncate(s, n) {
 
 export function buildReviewBubble({ replyId, review, bizName }) {
   const starLine = `${stars(review.star)}  ${review.name ?? '匿名'}`;
-  const reviewText = truncate(review.text, 80);
-  const draftText = truncate(review.draft ?? '', 120);
+  // 承認する前に全文を読めるよう、口コミも返信案も実質切らない（Flex の容量上限への保険だけ残す）
+  const reviewText = truncate(review.text, 1000);
+  const draftText = truncate(review.draft ?? '', 1500);
   const hasReplyId = Boolean(replyId);
 
   const footerContents = hasReplyId
