@@ -20,7 +20,15 @@ export function serveSelfPage(request, ctx = { env: {} }) {
     "/self/help/self-hosting": selfHosting,
   };
   const supportPage = path === '/self/help/faq' || path === '/self/help/report';
-  if (supportPage) {
+  const verificationFile = ctx.env.SELF_GOOGLE_SITE_VERIFICATION_FILE;
+  if (
+    typeof verificationFile === 'string' &&
+    /^google[a-f0-9]{16}\.html$/.test(verificationFile) &&
+    path === '/' + verificationFile
+  ) {
+    body = 'google-site-verification: ' + verificationFile;
+    type = 'text/plain; charset=utf-8';
+  } else if (supportPage) {
     body = path === '/self/help/faq' ? faq : report;
     type = 'text/html; charset=utf-8';
   } else if (path === '/self/assets/report.js') {

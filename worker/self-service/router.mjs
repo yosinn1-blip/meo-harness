@@ -32,6 +32,7 @@ export async function handleSelfRequest(request, env, ctx) {
   if (
     path === "/start" ||
     path === "/account" ||
+    /^\/google[a-f0-9]{16}\.html$/.test(path) ||
     path.startsWith("/account/replies/") ||
     path.startsWith("/self/")
   ) {

@@ -3,6 +3,46 @@ import assert from "node:assert/strict";
 import { buildWorker } from "../scripts/build-self-test.mjs";
 const compiled = await buildWorker();
 const worker = (await import(compiled)).default;
+const verificationFile = 'google0123456789abcdef.html';
+test('Google ownership verification serves only its configured file without auth or DB access', async () => {
+  const response = await worker.fetch(new Request('https://meo.test/' + verificationFile + '?token=private-query-fixture'), {
+    SELF_GOOGLE_SITE_VERIFICATION_FILE: verificationFile,
+    ADMIN_KEY: 'private-admin-fixture',
+    SELF_DB: { prepare() { throw new Error('Verification must not use the DB'); } },
+  }, {});
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'google-site-verification: ' + verificationFile);
+  assert.equal(response.headers.get('Content-Type'), 'text/plain; charset=utf-8');
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  assert.equal(response.headers.get('Set-Cookie'), null);
+  assert.equal(response.headers.get('Location'), null);
+  assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
+});
+test('Google ownership verification does not serve unconfigured or mismatched paths', async () => {
+  for (const [path, config] of [
+    ['/' + verificationFile, undefined],
+    ['/googlefedcba9876543210.html', verificationFile],
+    ['/self/' + verificationFile, verificationFile],
+    ['/' + verificationFile + '/extra', verificationFile],
+    ['/' + verificationFile + '?filename=' + verificationFile, undefined],
+  ]) {
+    const response = await worker.fetch(new Request('https://meo.test' + path), { SELF_GOOGLE_SITE_VERIFICATION_FILE: config }, {});
+    assert.equal(response.status, 404, path);
+  }
+});
+test('Google ownership verification rejects unsafe or malformed configuration', async () => {
+  for (const file of ['googleabc.html', 'google0123456789abcdef.html<script>', 'google0123456789abcdef.html\n', '../' + verificationFile, 1, {}, 'google' + 'a'.repeat(200) + '.html']) {
+    const response = await worker.fetch(new Request('https://meo.test/' + verificationFile), { SELF_GOOGLE_SITE_VERIFICATION_FILE: file }, {});
+    assert.equal(response.status, 404);
+  }
+});
+test('Google ownership verification does not accept writes', async () => {
+  for (const method of ['POST', 'PUT', 'DELETE']) {
+    const response = await worker.fetch(new Request('https://meo.test/' + verificationFile, {method, body:'private-body-fixture'}), {SELF_GOOGLE_SITE_VERIFICATION_FILE:verificationFile}, {});
+    assert.equal(response.status, 405);
+    assert.equal(await response.text(), '');
+  }
+});
 test("onboarding pages and assets are same-origin, secret-free and no-store", async () => {
   for (const path of ["/start", "/account", "/account/replies/ss_test"]) {
     const response = await worker.fetch(
