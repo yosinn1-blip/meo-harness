@@ -2,9 +2,11 @@ import { googleAccessToken, googleJson } from "./google.mjs";
 import { listGbpAccountsPage, listGbpLocationsPage } from "../../src/gbp.mjs";
 import { ensure, SelfError } from "./errors.mjs";
 import { randomToken, sha256, seal, unseal, tokenKey } from "./crypto.mjs";
-import { claimLocation, validateLocation } from "./store-repository.mjs";
-import { readSelfConfig } from "./config.mjs";
+import { claimLocation, validateLocation, findOwnedStore } from "./store-repository.mjs";
+import { readSelfConfig, canRegisterSelf } from "./config.mjs";
 export async function discoverLocations(ctx, actor, { cursor = null } = {}) {
+  if (readSelfConfig(ctx.env).pilotMode)
+    ensure(await canRegisterSelf(ctx, actor.sub), "REGISTRATION_CLOSED", 503);
   let progress = {
     accounts: [],
     index: 0,
@@ -145,10 +147,14 @@ export async function verifyLocationAccess(
 }
 export async function selectLocation(ctx, actor, ids) {
   ensure(
-    readSelfConfig(ctx.env).registrationEnabled,
+    await canRegisterSelf(ctx, actor.sub),
     "REGISTRATION_CLOSED",
     503,
   );
+  if (readSelfConfig(ctx.env).pilotMode && !(await findOwnedStore(ctx, actor.sub))) {
+    const count = await ctx.db.prepare("SELECT count(*) n FROM location_claims WHERE mode='self'").first();
+    ensure(count.n < 1, "CAPACITY_UNAVAILABLE", 409);
+  }
   validateLocation(ids);
   const candidate = await ctx.db
     .prepare(
@@ -158,5 +164,10 @@ export async function selectLocation(ctx, actor, ids) {
     .first();
   ensure(candidate, "LOCATION_NOT_ACCESSIBLE", 403);
   const actual = await verifyLocationAccess(ctx, actor, ids);
-  return claimLocation(ctx, { sub: actor.sub, ...ids, title: actual.title });
+  return claimLocation(ctx, {
+    sub: actor.sub,
+    accountId: ids.accountId,
+    locationId: ids.locationId,
+    title: actual.title,
+  });
 }

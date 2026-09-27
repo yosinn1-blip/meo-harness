@@ -188,11 +188,12 @@ function progress() {
     }[state.state] ?? 0;
   document
     .querySelectorAll("#steps li")
-    .forEach((e, n) =>
-      n === i
-        ? e.setAttribute("aria-current", "step")
-        : e.removeAttribute("aria-current"),
-    );
+    .forEach((e, n) => {
+      e.hidden = state.pilotMode && n > 1;
+      if (n === (state.pilotMode ? Math.min(i, 1) : i))
+        e.setAttribute("aria-current", "step");
+      else e.removeAttribute("aria-current");
+    });
 }
 async function locations(cursor = null) {
   const result = await api(
@@ -208,7 +209,8 @@ async function locations(cursor = null) {
           accountId: loc.accountId,
           locationId: loc.locationId,
         });
-        await code();
+        if (state.pilotMode) await refresh(true);
+        else await code();
       }),
     );
     list.append(box);
@@ -296,15 +298,27 @@ async function render() {
       root.append(oauthButton("Googleで接続", "connect"));
     root.append(oauthButton("Googleでログイン", "login", "secondary"));
     await loadChallenge();
+  } else if (
+    (!state.store && !state.registrationAllowed) ||
+    (state.pilotMode && !state.registrationAllowed)
+  ) {
+    heading("新規受付はお休み中です");
+    text("現在、このアカウントでは新しい店舗を接続できません。");
+  } else if (state.pilotMode && state.store && state.state !== "needs_google_reconnect") {
+    heading("お店の接続確認ができました");
+    text(state.store.title);
+    text("本人限定・1店舗の接続テストです。AI生成・LINE送信・口コミ公開は停止中です。");
   } else if (state.state === "needs_google_reconnect") {
-    heading("Googleをもう一度接続");
+    heading(state.store ? "Googleをもう一度接続" : "Googleでお店を接続");
+    if (state.pilotMode) text("本人限定・1店舗の接続テストです。AI生成・LINE送信・口コミ公開は停止中です。");
     text("お店を管理している、同じGoogleアカウントで接続してください。");
     root.append(
-      oauthButton("Googleで再接続", state.store ? "reconnect" : "connect"),
+      oauthButton(state.store ? "Googleで再接続" : "Googleでお店を接続", state.store ? "reconnect" : "connect"),
     );
     await loadChallenge();
   } else if (state.state === "google_connected") {
     heading("あなたのお店を選んでください");
+    if (state.pilotMode) text("本人限定・1店舗の接続テストです。AI生成・LINE送信・口コミ公開は停止中です。");
     text("このGoogleアカウントで管理できる店舗だけを表示します。");
     const list = node("div");
     list.id = "locations";

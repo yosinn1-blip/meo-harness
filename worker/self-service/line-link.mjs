@@ -1,3 +1,4 @@
+import { readSelfConfig } from "./config.mjs";
 import { LIMITS, dateKeys } from "./contracts.mjs";
 import { ensure, SelfError } from "./errors.mjs";
 import { sha256, hmac, safeEqual } from "./crypto.mjs";
@@ -12,6 +13,7 @@ export function authorizeLineActor({ source, registeredUserId, active }) {
   );
 }
 export async function issueLineCode(ctx, actor) {
+  ensure(!readSelfConfig(ctx.env).pilotMode, "PROCESSING_CLOSED", 503);
   const s = await requireStore(ctx, actor);
   ensure(s.state !== "disconnected", "STORE_INACTIVE", 409);
   await consumeRate(ctx, {
@@ -43,6 +45,7 @@ export async function issueLineCode(ctx, actor) {
   return { code, expiresAt, addFriendUrl: ctx.env.SELF_LINE_FRIEND_URL };
 }
 export async function consumeLineCode(ctx, event) {
+  if (readSelfConfig(ctx.env).pilotMode) return;
   ensure(
     event.source?.type === "user" && event.source.userId,
     "LINE_USER_REQUIRED",
@@ -70,6 +73,7 @@ export async function consumeLineCode(ctx, event) {
   return { ok: true };
 }
 export async function sendLineCheck(ctx, actor) {
+  ensure(!readSelfConfig(ctx.env).pilotMode, "PROCESSING_CLOSED", 503);
   const s = await requireStore(ctx, actor);
   ensure(
     s.state === "line_pending" && s.pendingLineUserId,
@@ -134,6 +138,7 @@ export async function sendLineCheck(ctx, actor) {
   return { ok: true, expiresAt: ctx.now() + LIMITS.pinMs };
 }
 export async function verifyLinePin(ctx, actor, pin) {
+  ensure(!readSelfConfig(ctx.env).pilotMode, "PROCESSING_CLOSED", 503);
   ensure(/^\d{6}$/.test(pin), "PIN_INVALID");
   const s = await requireStore(ctx, actor);
   const n = ctx.now();

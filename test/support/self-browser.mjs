@@ -1,4 +1,5 @@
 import https from "node:https";
+import { pilotSettings } from "./self-pilot.mjs";
 import { readFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -240,7 +241,8 @@ export async function startTestApp() {
             response = Response.json({ pin: lastPin });
           else if (url.pathname === "/fixture/scenario") {
             Object.assign(settings, data);
-            env.SELF_REGISTRATION_ENABLED = String(settings.registration);
+            if (data.pilot) Object.assign(env, await pilotSettings(data.pilotOwner ?? "alice"));
+            env.SELF_REGISTRATION_ENABLED = String(settings.pilot ? false : settings.registration);
             if (data.drafts !== undefined)
               env.SELF_MONTHLY_DRAFT_LIMIT = String(data.drafts);
             if (data.activeLimit !== undefined)

@@ -51,3 +51,38 @@ test("real workerd fetch reaches Siteverify, accepts once, and rejects replay an
   }
   assert.equal(outbound.length, 3);
 });
+
+test("real workerd pilot endpoints use session owner, not client owner or intent", async (t) => {
+  const { pilotSettings } = await import('../support/self-pilot.mjs');
+  const { createSelfContext } = await import('../../worker/self-service/config.mjs');
+  const { createSession } = await import('../../worker/self-service/session.mjs');
+  const { SELF_DB, ...bindings } = fixtureEnv(null, await pilotSettings());
+  const outbound=[];
+  const mf = new Miniflare({
+    modules:true, compatibilityDate:'2024-11-01', scriptPath:fileURLToPath(await buildWorker()), bindings,
+    d1Databases:['SELF_DB'], kvNamespaces:['STORES'],
+    outboundService: request => {
+      outbound.push(request.url);
+      assert.equal(request.url,'https://challenges.cloudflare.com/turnstile/v0/siteverify');
+      return Response.json({success:true,hostname:'meo.test',action:'self_start'});
+    },
+  });
+  t.after(()=>mf.dispose());
+  const db=await mf.getD1Database('SELF_DB'); await applySchema(db);
+  const ctx=createSelfContext({...bindings,SELF_DB:db});
+  for(const sub of [null,'bob','alice']) {
+    if(sub)await db.prepare('INSERT INTO users VALUES (?,?)').bind(sub,Date.now()).run();
+    const s=await createSession(ctx,sub);
+    const headers={Origin:'https://meo.test','Content-Type':'application/json','X-CSRF-Token':s.csrf,Cookie:s.cookie.split(';')[0]};
+    const before=outbound.length;
+    const status=await (await mf.dispatchFetch('https://meo.test/api/self/status',{headers})).json();
+    assert.equal(status.registrationAllowed,sub==='alice');
+    assert.equal(status.registrationOpen,false);
+    for(const intent of ['connect', ...(sub?['reconnect']:[])]) {
+      const r=await mf.dispatchFetch('https://meo.test/api/self/google/start',{method:'POST',headers,body:JSON.stringify({intent,challenge:'fixture',owner_sub:'alice',pilotOwner:bindings.SELF_PILOT_OWNER_SHA256})});
+      assert.equal(r.status,sub==='alice'?200:503);
+    }
+    if(sub!=='alice') assert.equal(outbound.length,before);
+  }
+  assert.equal(outbound.length,2);
+});

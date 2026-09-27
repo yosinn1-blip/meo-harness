@@ -1,3 +1,4 @@
+import { sha256, safeEqual } from "./crypto.mjs";
 export function nonNegativeInteger(v) {
   if (!/^(0|[1-9]\d*)$/.test(String(v ?? ""))) return 0;
   const n = Number(v);
@@ -35,7 +36,20 @@ export function readSelfConfig(env) {
       env.SELF_LEGACY_PUSH_RESERVE !== undefined &&
       /^(0|[1-9]\d*)$/.test(env.SELF_LEGACY_PUSH_RESERVE),
   );
+  // Presence (even empty/malformed) disables public intake and all self processing.
+  const pilotMode = env.SELF_PILOT_OWNER_SHA256 !== undefined;
+  const pilotEnabled = Boolean(
+    configured && pilotMode &&
+    /^[a-f0-9]{64}$/.test(env.SELF_PILOT_OWNER_SHA256) &&
+    env.SELF_REGISTRATION_ENABLED === "false" &&
+    env.SELF_PROCESSING_ENABLED === "false" &&
+    env.SELF_MAX_ACTIVE_STORES === "1" &&
+    env.SELF_MONTHLY_DRAFT_LIMIT === "0" &&
+    env.SELF_MONTHLY_PUSH_LIMIT === "0" &&
+    env.TURNSTILE_SECRET_KEY && env.TURNSTILE_SITE_KEY && env.SELF_TERMS_VERSION
+  );
   const registrationEnabled = Boolean(
+    !pilotMode &&
     operational &&
       env.SELF_REGISTRATION_ENABLED === "true" &&
       limits.maxActiveStores > 0 &&
@@ -50,9 +64,18 @@ export function readSelfConfig(env) {
     origin,
     configured,
     registrationEnabled,
-    processingEnabled: operational && env.SELF_PROCESSING_ENABLED === "true",
+    pilotMode,
+    pilotEnabled,
+    processingEnabled: !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true",
     limits,
   };
+}
+// sub must come from a validated session or verified Google ID token, never request data.
+export async function canRegisterSelf(ctx, sub) {
+  const c = readSelfConfig(ctx.env);
+  if (!c.pilotMode) return c.registrationEnabled;
+  return Boolean(c.pilotEnabled && typeof sub === "string" && sub &&
+    safeEqual(await sha256(sub), ctx.env.SELF_PILOT_OWNER_SHA256));
 }
 export function createSelfContext(
   env,

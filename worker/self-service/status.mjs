@@ -1,6 +1,6 @@
 import { readSession } from "./session.mjs";
 import { findOwnedStore } from "./store-repository.mjs";
-import { readSelfConfig } from "./config.mjs";
+import { readSelfConfig, canRegisterSelf } from "./config.mjs";
 import { dateKeys } from "./contracts.mjs";
 import { draftBudgetScope } from "./budget.mjs";
 export async function getSelfStatus(ctx, request) {
@@ -12,6 +12,8 @@ export async function getSelfStatus(ctx, request) {
     notice: s?.notice ?? null,
     csrf: s?.csrf ?? null,
     registrationOpen: c.registrationEnabled,
+    registrationAllowed: await canRegisterSelf(ctx, s?.owner_sub),
+    pilotMode: c.pilotMode,
     processingEnabled: c.processingEnabled,
     limits: c.limits,
     termsVersion: ctx.env.SELF_TERMS_VERSION ?? null,

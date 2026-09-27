@@ -1,3 +1,4 @@
+import { readSelfConfig } from "./config.mjs";
 import { authorizeLineActor } from "./line-link.mjs";
 import { sha256 } from "./crypto.mjs";
 import { consumeRate } from "./abuse.mjs";
@@ -25,6 +26,7 @@ const messages = {
   PROCESSING_CLOSED: "処理を一時停止しているため投稿していません。",
 };
 export async function sendSelfFeedback(ctx, event, result) {
+  if (readSelfConfig(ctx.env).pilotMode) return;
   const message = messages[result?.code];
   const id = /^(approve|skip):(ss_[\w-]+)$/.exec(
     event.postback?.data ?? "",

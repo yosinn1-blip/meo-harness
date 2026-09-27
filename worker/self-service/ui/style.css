@@ -81,6 +81,9 @@ body {
   font-size: 14px;
   color: var(--muted);
 }
+#steps li[hidden] {
+  display: none;
+}
 #steps li::before {
   content: counter(step);
   display: grid;
@@ -384,7 +387,10 @@ a {
     min-height: 0;
     flex: 1;
   }
-  #steps li::before {
+  #steps li[hidden] {
+  display: none;
+}
+#steps li::before {
     width: 25px;
     height: 25px;
   }

@@ -1,6 +1,6 @@
 import { jwtVerify, createLocalJWKSet } from "jose";
 import { SelfError, ensure } from "./errors.mjs";
-import { readSelfConfig } from "./config.mjs";
+import { readSelfConfig, canRegisterSelf } from "./config.mjs";
 import { LIMITS, SELF_COOKIE } from "./contracts.mjs";
 import {
   randomToken,
@@ -46,9 +46,13 @@ export async function startGoogle(ctx, request, { intent, challenge }) {
   const c = readSelfConfig(ctx.env);
   ensure(c.configured, "REGISTRATION_CLOSED", 503);
   const actor = await requireMutation(ctx, request, { anonymous: true });
-  if (intent === "reconnect") ensure(actor.sub, "LOGIN_REQUIRED", 401);
+  if (intent === "reconnect") {
+    ensure(actor.sub, "LOGIN_REQUIRED", 401);
+    if (c.pilotMode || !(await findOwnedStore(ctx, actor.sub)))
+      ensure(await canRegisterSelf(ctx, actor.sub), "REGISTRATION_CLOSED", 503);
+  }
   if (intent === "connect") {
-    ensure(c.registrationEnabled, "REGISTRATION_CLOSED", 503);
+    ensure(await canRegisterSelf(ctx, actor.sub), "REGISTRATION_CLOSED", 503);
     const count = await ctx.db
       .prepare("SELECT count(*) n FROM location_claims WHERE mode='self'")
       .first();
@@ -90,7 +94,7 @@ export async function startGoogle(ctx, request, { intent, challenge }) {
       .bind(
         hash,
         actor.sessionHash,
-        intent,
+        c.pilotMode && intent !== "login" ? "pilot:" + intent : intent,
         await seal(verifier, tokenKey(ctx), "oauth:" + hash),
         nonce,
         actor.sub,
@@ -131,6 +135,14 @@ export async function finishGoogle(ctx, request) {
     .bind(hash, session.token_hash, ctx.now())
     .first();
   ensure(attempt, "OAUTH_STATE_INVALID");
+  // Persist the server-side pilot intent so removing its setting also revokes in-flight reconnects.
+  const pilotAttempt = attempt.intent.startsWith("pilot:");
+  const intent = pilotAttempt ? attempt.intent.slice(6) : attempt.intent;
+  ensure(["connect", "login", "reconnect"].includes(intent), "OAUTH_STATE_INVALID");
+  if (pilotAttempt) ensure(readSelfConfig(ctx.env).pilotMode, "REGISTRATION_CLOSED", 503);
+  if (pilotAttempt || intent === "connect" ||
+      (intent === "reconnect" && (readSelfConfig(ctx.env).pilotMode || !attempt.store_id)))
+    ensure(await canRegisterSelf(ctx, attempt.owner_sub), "REGISTRATION_CLOSED", 503);
   ensure(!u.searchParams.has("error"), "GOOGLE_PERMISSION_DENIED", 403);
   const code = u.searchParams.get("code");
   ensure(code && code.length < 4096, "OAUTH_CODE_INVALID");
@@ -165,7 +177,7 @@ export async function finishGoogle(ctx, request) {
     403,
   );
   let ciphertext = null;
-  if (attempt.intent !== "login") {
+  if (intent !== "login") {
     ensure(
       data.scope
         ?.split(" ")
@@ -215,7 +227,7 @@ export async function finishGoogle(ctx, request) {
         )
         .bind(sub, ciphertext, n, newHash),
     );
-  if (attempt.intent === "reconnect")
+  if (intent === "reconnect")
     statements.push(
       ctx.db
         .prepare(

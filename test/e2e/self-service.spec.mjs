@@ -392,3 +392,36 @@ test("wrong-language draft stays in processing backlog with no approval or Googl
   expect(app.writes).toEqual([]);
   await page.screenshot({ path: 'output/self-service/quality-held.png', fullPage: true });
 });
+
+
+test("owner-only pilot login, Google connect and selection stops without LINE setup", async ({page}) => {
+  await fixture(page, "scenario", {pilot:true});
+  await page.goto(app.baseURL + "/start");
+  await expect(page.getByRole("button", {name:"Googleで接続",exact:true})).toHaveCount(0);
+  await page.getByRole("button", {name:"Googleでログイン",exact:true}).click();
+  await page.getByRole("button", {name:"架空Googleで許可"}).click();
+  await expect(page.getByText("本人限定・1店舗の接続テストです。",{exact:false})).toBeVisible();
+  await page.getByRole("button", {name:"Googleでお店を接続",exact:true}).click();
+  await page.getByRole("button", {name:"架空Googleで許可"}).click();
+  await page.getByRole("button", {name:"この店舗を使う",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"お店の接続確認ができました",exact:true})).toBeVisible();
+  await expect(page.getByText("AI生成・LINE送信・口コミ公開は停止中です。",{exact:false})).toBeVisible();
+  await expect(page.getByRole("button",{name:/LINE|利用を開始|利用を再開/})).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole("heading",{name:"お店の接続確認ができました",exact:true})).toBeVisible();
+  await expect(page.locator("#steps li").nth(2)).toBeHidden();
+  await expect(page.locator("#steps li").nth(3)).toBeHidden();
+  await page.screenshot({path:"output/self-service/owner-pilot-connected.png",fullPage:true});
+  await fixture(page,"cron");
+  expect((await app.db.prepare("SELECT count(*) n FROM line_links").first()).n).toBe(0);
+  expect(app.pushes).toEqual([]); expect(app.writes).toEqual([]); expect(app.feedback).toEqual([]);
+});
+test("pilot login from another account never offers reconnect or lists locations", async ({page}) => {
+  await fixture(page,"scenario",{pilot:true,pilotOwner:"not-alice"});
+  await page.goto(app.baseURL+"/start");
+  await page.getByRole("button",{name:"Googleでログイン",exact:true}).click();
+  await page.getByRole("button",{name:"架空Googleで許可"}).click();
+  await expect(page.getByRole("heading",{name:"新規受付はお休み中です",exact:true})).toBeVisible();
+  await expect(page.getByRole("button",{name:/接続|この店舗/})).toHaveCount(1); // Existing disconnect safety action only.
+  await expect(page.getByRole("button",{name:/Googleで.*接続|この店舗を使う/})).toHaveCount(0);
+});
