@@ -53,3 +53,8 @@ E2Eは架空プロバイダであり、実GoogleのGBP権限・実店舗・LINE�
 現在の候補は `Yoshiki Apps` 1件で、既存legacy予約済み。美容院は現在の一覧に表示されていない。既存店の選択・予約解除・別店舗の推測登録は行わず、試用する美容院の店名またはGoogleマップURLを本人へ確認した。管理権限不足・Googleアカウント違いなどの原因はまだ未確定。
 
 実Google接続成功と、サービス全体の実運用開始は別。LINE本人確認・口コミ取得・停止/切断の実証が残るため、公開gateは引き続きfalse。今回は読み取り検証と記録のみで、デプロイ・認証変更・LINE送信・口コミ公開なし。証跡は `output/self-service/final-launch/pilot-google-connected.json` と `pilot-google-connected-store-list.png`。外部実装委譲の対象なし。
+
+
+## 本人説明による対象の訂正
+
+その後、本人からclomusの店主には未相談で、以前のものはデモ・プレゼン候補（採用見送り）だったと説明を受けた。clomusの試用了承・導入確定として扱わない。店名確認待ちは解消し、実店舗接続は保留。続く[安全な動作確認](self-service-safe-validation-2026-09-27.md)では架空環境299件成功と本人Google店舗一覧の再取得を確認したが、実LINE・返信・移行は行っていない。
