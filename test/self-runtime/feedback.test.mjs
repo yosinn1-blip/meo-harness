@@ -110,6 +110,8 @@ test("rewrite steps reply for free and the confirmation card approves only the n
   assert.match(json, /approve:ss_e:r2/);
   assert.match(json, /edit:ss_e/);
   assert.match(json, /直した文/);
+  assert.match(json, /編集する/);
+  assert.doesNotMatch(json, /書き直す/);
   // A text message from someone else never gets the preview.
   const before = calls.length;
   await sendSelfFeedback(

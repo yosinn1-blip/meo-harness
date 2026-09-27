@@ -26,13 +26,13 @@ const messages = {
   STORE_INACTIVE: "現在は停止中または再接続が必要なため投稿していません。",
   PROCESSING_CLOSED: "処理を一時停止しているため投稿していません。",
   EDIT_WAITING:
-    "書き直した返信文を、このトークにそのまま送ってください（10分以内・1200字まで）。やめる場合は「やめる」と送ってください。",
+    "編集した返信文を、このトークにそのまま送ってください（10分以内・1200字まで）。やめる場合は「やめる」と送ってください。",
   EDIT_CANCELLED:
-    "書き直しをやめました。元の返信案のカードから承認・スキップできます。",
+    "編集をやめました。元の返信案のカードから承認・スキップできます。",
   EDIT_INVALID:
     "返信文が空か、1200字を超えています。もう一度送ってください。やめる場合は「やめる」と送ってください。",
   DRAFT_CHANGED:
-    "この返信案は書き直されています。最新の確認カードから「承認して送信」を押してください。",
+    "この返信案は編集されています。最新の確認カードから「承認して送信」を押してください。",
   DRAFT_EDITED: "この内容でGoogleに返信しますか？ よければ「承認して送信」を押してください。",
 };
 // Conversational steps: the account URL would only add noise.
@@ -141,7 +141,7 @@ function feedbackMessages(ctx, result, id, message, store) {
     { type: "text", text },
     {
       type: "flex",
-      altText: "書き直した返信案の確認",
+      altText: "編集した返信案の確認",
       contents: buildReviewBubble({
         replyId: id,
         review: { ...review, name: (review.name ?? "匿名").slice(0, 80), draft },

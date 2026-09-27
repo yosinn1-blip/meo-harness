@@ -1,7 +1,7 @@
 // LINE Flex Message ビルダー — クチコミ返信承認フロー
 //
 // 各レビューを bubble にして carousel でまとめる。
-// replyId あり: [承認して送信] + [スキップ]（editable なら間に [書き直す]）
+// replyId あり: [承認して送信] + [スキップ]（editable なら間に [編集する]）
 // replyId なし: [確認済み] の1ボタン（非 GBP 店舗、ダイジェスト確認用）
 
 function stars(n) {
@@ -34,7 +34,7 @@ export function buildReviewBubble({ replyId, review, bizName, rev = 1, editable 
           type: 'button',
           style: 'secondary',
           height: 'sm',
-          action: { type: 'postback', label: '書き直す', data: `edit:${replyId}` },
+          action: { type: 'postback', label: '編集する', data: `edit:${replyId}` },
         }] : []),
         {
           type: 'button',
