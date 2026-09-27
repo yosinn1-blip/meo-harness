@@ -44,6 +44,12 @@
 - 本番Logpushはfalse。Workersのobservability設定は今回のAPI応答に明示値なしで、trace/自動Invocationログ無効化まで確認済みとはしない。
 - Groq Consoleと本番キー所属の一致、データ制御設定、正式な連絡先/条件版の確認を残す。OAuth tokenの無条件revokeは同じプロジェクトの既存認可に影響するため自動実行しない。
 
+## Free実行上限の追加確認
+
+1店舗・口コミ1件・下書き1件・LINE1通・期限切れ店舗0・結果不明返信0を、実装/既存schemaとメモリ内SQLiteで計数した参考値は、D1 binding呼出38回、SQL文70本、架空provider呼出6回。実Cloudflareでの上限検証ではない。最大5店舗・5下書き、cleanupで店舗を削除する場合、既存KV処理分はこの値に含まれない。
+
+[D1制限表](https://developers.cloudflare.com/d1/platform/limits/)のFree 50 queriesと、[Workers内部サービスの制限](https://developers.cloudflare.com/workers/platform/limits/#subrequests)の数え方を区別する。[batch](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)は複数SQLを1callにまとめるため、70 SQL文だけを根拠に上限超過と断定しない。公開前に本番相当の1 invocation全体を計測し、上限内の処理件数を決める。課金変更で解消済みと扱わない。
+
 ## 証跡
 
 本番読み取りはmainのignored `output/self-service/launch-audit/read-only.json`。ローカルのRED/GREEN、全体テスト、生ログと元終了コードは既存worktreeの同名ディレクトリ。秘密・Google subject・実口コミ本文は保存しない。公開・実送信・課金・資格情報変更は未実施。
