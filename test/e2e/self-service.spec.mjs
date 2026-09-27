@@ -46,6 +46,7 @@ async function sendPin(page) {
     page.getByRole("button", { name: "確認番号をLINEに送る" }).click(),
   ]);
   expect(r.status(), await r.text()).toBe(200);
+  await expect(page.getByText("LINEに確認番号を送りました")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "確認する", exact: true }),
   ).toBeEnabled();

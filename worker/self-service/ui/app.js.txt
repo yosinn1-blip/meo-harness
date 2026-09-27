@@ -2,6 +2,7 @@ const root = document.querySelector("#current-step"),
   errorBox = document.querySelector("#error");
 let state = null,
   lineCode = null,
+  pinSent = false,
   nextCursor = null,
   challengeToken = "",
   challengeWidget = null,
@@ -160,7 +161,7 @@ async function google(intent) {
 }
 async function refresh(force = false) {
   state = await api("status");
-  const fingerprint = JSON.stringify(state) + lineCode;
+  const fingerprint = JSON.stringify(state) + lineCode + pinSent;
   if (!force && fingerprint === rendered) return;
   rendered = fingerprint;
   await render();
@@ -353,7 +354,16 @@ async function render() {
     root.append(button("コードを再発行", code, "secondary"));
     if (state.lineDetected) {
       text("LINEを検出しました。届いた番号で通知先を確認します。", "success");
-      root.append(button("確認番号をLINEに送る", () => mutate("line/test")));
+      root.append(
+        button("確認番号をLINEに送る", async () => {
+          pinSent = false;
+          await api("line/test", {});
+          pinSent = true;
+          await refresh(true);
+        }),
+      );
+      if (pinSent)
+        text("LINEに確認番号を送りました。届いた6桁を入力してください。", "success");
       const label = node("label", "確認番号");
       label.htmlFor = "pin";
       const pin = node("input");
