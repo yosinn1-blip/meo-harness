@@ -161,6 +161,53 @@ test("denied Google authorization returns without secrets in URL", async ({
   await expect(page.getByRole("alert")).toContainText("権限が許可されません");
   expect(page.url()).toBe(app.baseURL + "/account");
 });
+test("expired Turnstile tokens disable Google connection until a fresh check", async ({ page, context }) => {
+  await context.route("https://challenges.cloudflare.com/turnstile/v0/api.js?**", (route) => route.fulfill({
+    contentType: "text/javascript",
+    body: `window.turnstile={render:(el,o)=>{const b=document.createElement('button');b.textContent='Expire fixture challenge';b.onclick=()=>o['expired-callback']();el.append(b);o.callback('fixture-challenge');return 'fixture-widget';}};`,
+  }));
+  await page.goto(app.baseURL + "/start");
+  const connectButton = page.getByRole("button", { name: "Googleで接続", exact: true });
+  await expect(connectButton).toBeEnabled();
+  await page.getByRole("button", { name: "Expire fixture challenge" }).click();
+  await expect(connectButton).toBeDisabled();
+});
+test("failed Google start resets the used Turnstile token before retry", async ({ page, context }) => {
+  await context.route("https://challenges.cloudflare.com/turnstile/v0/api.js?**", (route) => route.fulfill({
+    contentType: "text/javascript",
+    body: `let options;window.turnstile={render:(el,o)=>{options=o;o.callback('fixture-challenge-1');return 'fixture-widget';},reset:()=>options.callback('fixture-challenge-2')};`,
+  }));
+  const tokens = [];
+  await page.route("**/api/self/google/start", (route) => {
+    tokens.push(route.request().postDataJSON().challenge);
+    if (tokens.length === 1) return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ ok: false, code: "CHALLENGE_FAILED" }) });
+    return route.continue();
+  });
+  await page.goto(app.baseURL + "/start");
+  const connectButton = page.getByRole("button", { name: "Googleで接続", exact: true });
+  await connectButton.click();
+  await expect(page.getByRole("alert")).toContainText("本人確認をもう一度");
+  await connectButton.click();
+  await expect(page.getByRole("button", { name: "架空Googleで許可" })).toBeVisible();
+  expect(tokens).toEqual(["fixture-challenge-1", "fixture-challenge-2"]);
+});
+test("challenge refresh during a pending request cannot enable retry before reset completes", async ({ page, context }) => {
+  await context.route("https://challenges.cloudflare.com/turnstile/v0/api.js?**", (route) => route.fulfill({
+    contentType: "text/javascript",
+    body: `window.turnstile={render:(el,o)=>{window.fixtureChallengeCallback=o.callback;const b=document.createElement('button');b.textContent='Complete fixture challenge';b.onclick=()=>o.callback('fresh-after-reset');el.append(b);o.callback('fixture-challenge');return 'fixture-widget';},reset:()=>{}};`,
+  }));
+  await page.route("**/api/self/google/start", async (route) => {
+    await page.evaluate(() => window.fixtureChallengeCallback("refreshed-in-flight"));
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ ok: false, code: "CHALLENGE_FAILED" }) });
+  });
+  await page.goto(app.baseURL + "/start");
+  const connectButton = page.getByRole("button", { name: "Googleで接続", exact: true });
+  await connectButton.click();
+  await expect(page.getByRole("alert")).toContainText("本人確認をもう一度");
+  await expect(connectButton).toBeDisabled();
+  await page.getByRole("button", { name: "Complete fixture challenge" }).click();
+  await expect(connectButton).toBeEnabled();
+});
 test("closed intake keeps login and stop available", async ({ page }) => {
   await onboard(page);
   await fixture(page, "scenario", { registration: false });

@@ -4,6 +4,7 @@ let state = null,
   lineCode = null,
   nextCursor = null,
   challengeToken = "",
+  challengeWidget = null,
   rendered = "",
   busy = false;
 const messages = {
@@ -111,20 +112,20 @@ async function loadChallenge() {
   const target = document.querySelector("#challenge");
   if (target.dataset.loaded) return;
   target.dataset.loaded = "true";
-  const render = () =>
-    window.turnstile.render(target, {
+  const render = () => {
+    challengeWidget = window.turnstile.render(target, {
       sitekey: state.turnstileSiteKey,
       action: "self_start",
       callback: (t) => {
         challengeToken = t;
         document
           .querySelectorAll("[data-oauth]")
-          .forEach((b) => (b.disabled = false));
+          .forEach((b) => (b.disabled = busy));
       },
-      "expired-callback": () => {
-        challengeToken = "";
-      },
+      "expired-callback": clearChallenge,
+      "error-callback": clearChallenge,
     });
+  };
   if (window.turnstile) return render();
   const script = document.createElement("script");
   script.src =
@@ -132,6 +133,10 @@ async function loadChallenge() {
   script.onload = render;
   script.onerror = () => showError({ code: "CHALLENGE_FAILED" });
   document.head.append(script);
+}
+function clearChallenge() {
+  challengeToken = "";
+  document.querySelectorAll("[data-oauth]").forEach((b) => (b.disabled = true));
 }
 function oauthButton(label, intent, cls = "") {
   const b = button(label, () => google(intent), cls);
@@ -141,8 +146,17 @@ function oauthButton(label, intent, cls = "") {
 }
 async function google(intent) {
   if (!challengeToken) throw { code: "CHALLENGE_FAILED" };
-  const r = await api("google/start", { intent, challenge: challengeToken });
-  location.assign(r.authorizationUrl);
+  const token = challengeToken;
+  clearChallenge();
+  try {
+    const r = await api("google/start", { intent, challenge: token });
+    location.assign(r.authorizationUrl);
+  } catch (error) {
+    clearChallenge();
+    if (window.turnstile && challengeWidget !== null)
+      window.turnstile.reset(challengeWidget);
+    throw error;
+  }
 }
 async function refresh(force = false) {
   state = await api("status");
