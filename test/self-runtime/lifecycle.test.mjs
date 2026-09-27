@@ -111,3 +111,39 @@ test("pausing unfinished setup cannot bypass the 24 hour cleanup", async (t) => 
     (e) => e.code === "ACTIVATION_REQUIRED",
   );
 });
+test("first activation tells the operator on LINE once; resume and failures stay silent", async (t) => {
+  const { db } = await withD1(t);
+  await applySchema(db);
+  const pushes = [];
+  let pushFails = false;
+  const env = { ...fixtureEnv(db), SELF_OPERATOR_LINE_USER_ID: "U" + "0".repeat(32) };
+  const ctx = createSelfContext(env, {
+    fetchImpl: async (u, i) => {
+      if (String(u).includes("api.line.me/v2/bot/message/push")) {
+        pushes.push(JSON.parse(i.body));
+        if (pushFails) throw new Error("line down");
+        return Response.json({});
+      }
+      return Response.json(
+        String(u).includes("/token")
+          ? { access_token: "fixture" }
+          : String(u).includes("mybusinessaccountmanagement") ? { name: "accounts/1" }
+          : { name: "locations/2", title: "店" },
+      );
+    },
+  });
+  await seedStore(ctx, { state: "line_verified" });
+  await seedGoogleCredential(ctx);
+  await activateStore(ctx, actor, { confirmed: true, termsVersion: "fixture-v1" });
+  assert.equal(pushes.length, 1);
+  assert.equal(pushes[0].to, env.SELF_OPERATOR_LINE_USER_ID);
+  assert.match(pushes[0].messages[0].text, /店/);
+  assert.match(pushes[0].messages[0].text, /1\/\d+店舗/);
+  await pauseStore(ctx, actor);
+  await activateStore(ctx, actor, { confirmed: true, termsVersion: "fixture-v1" });
+  assert.equal(pushes.length, 1, "resuming a paused store is not a new registration");
+  await db.prepare("UPDATE stores SET state='line_verified'").run();
+  pushFails = true;
+  await activateStore(ctx, actor, { confirmed: true, termsVersion: "fixture-v1" });
+  assert.equal((await db.prepare("SELECT state FROM stores").first()).state, "active");
+});

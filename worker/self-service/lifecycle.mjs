@@ -3,6 +3,7 @@ import { requireStore, findOwnedStore } from "./store-repository.mjs";
 import { verifyLocationAccess } from "./locations.mjs";
 import { readSelfConfig } from "./config.mjs";
 import { budgetStatement, reservationStatement } from "./budget.mjs";
+import { notifyOperatorActivation } from "./operator-notify.mjs";
 export function storeGuard(ctx, store, states) {
   const placeholders = states.map(() => "?").join(",");
   return ctx.db
@@ -61,6 +62,12 @@ export async function activateStore(ctx, actor, { termsVersion, confirmed }) {
       409,
     );
   }
+  // Resuming a paused store is not a new registration.
+  if (["line_verified", "ready"].includes(s.state))
+    await notifyOperatorActivation(ctx, {
+      title: actual.title,
+      maxStores: c.limits.maxActiveStores,
+    });
   return { ok: true };
 }
 export async function pauseStore(ctx, actor) {
