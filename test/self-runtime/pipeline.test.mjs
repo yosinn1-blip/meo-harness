@@ -13,7 +13,9 @@ import {
   processSelfJobs,
 } from "../../worker/self-service/ingestion.mjs";
 import { sendSelfDigest } from "../../worker/self-service/notifications.mjs";
-import { pauseStore } from "../../worker/self-service/lifecycle.mjs";
+import { pauseStore, disconnectStore } from "../../worker/self-service/lifecycle.mjs";
+import { createSession } from "../../worker/self-service/session.mjs";
+import { getSelfStatus } from "../../worker/self-service/status.mjs";
 async function setup(t, { drafts = "1", timeout = false, aiText = "ご来店ありがとうございました。" } = {}) {
   const { db } = await withD1(t);
   await applySchema(db);
@@ -79,6 +81,31 @@ async function setup(t, { drafts = "1", timeout = false, aiText = "ご来店あ�
   await seedGoogleCredential(ctx);
   return { ctx, store, calls };
 }
+test("same GBP location keeps its monthly draft budget across disconnect and different owners", async (t) => {
+  const { ctx, store, calls } = await setup(t);
+  await pollSelfStore(ctx, store.id);
+  await processSelfJobs(ctx, { limit: 1 });
+  assert.equal(calls.ai, 1);
+  let previous = store;
+  for (const sub of ["alice", "bob"]) {
+    await disconnectStore(ctx, { sub: previous.ownerSub });
+    const next = await seedStore(ctx, { sub });
+    assert.notEqual(next.id, previous.id);
+    await seedGoogleCredential(ctx, sub);
+    await pollSelfStore(ctx, next.id);
+    await processSelfJobs(ctx, { limit: 1 });
+    assert.equal(calls.ai, 1, "re-registration must not buy another draft");
+    const session = await createSession(ctx, sub);
+    const status = await getSelfStatus(ctx, new Request("https://meo.test/api/self/status", {
+      headers: { Cookie: session.cookie.split(";")[0] },
+    }));
+    assert.deepEqual(status.usage, [{ kind: "draft", used: 1, limit: 1 }]);
+    previous = next;
+  }
+  ctx.now = () => Date.parse("2026-10-01T00:00:00Z");
+  await processSelfJobs(ctx, { limit: 1 });
+  assert.equal(calls.ai, 2, "a new month gets its own quota");
+});
 test("invalid AI language creates no approval or LINE push and still consumes its draft unit", async (t) => {
   const { ctx, store, calls } = await setup(t, { aiText: 'Thank you for your review.' });
   await pollSelfStore(ctx, store.id);

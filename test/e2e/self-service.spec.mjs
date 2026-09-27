@@ -63,6 +63,8 @@ async function onboard(page) {
   const pin = (await (await fixture(page, "pin")).json()).pin;
   await page.getByLabel("確認番号", { exact: true }).fill(pin);
   await page.getByRole("button", { name: "確認する", exact: true }).click();
+  await expect(page.getByRole("link", { name: "利用条件（別タブ）" })).toHaveAttribute("href", "/self/terms");
+  await expect(page.getByRole("link", { name: "プライバシー（別タブ）" })).toHaveAttribute("href", "/self/privacy");
   await page.getByLabel("利用条件を確認しました").check();
   await page.getByRole("button", { name: "利用を開始する" }).click();
   await expect(
@@ -101,6 +103,21 @@ test("PC initial registration, empty reviews, pause/resume and disconnect withou
     page.getByRole("button", { name: "Googleで接続", exact: true }),
   ).toBeVisible();
   expect(admin).toEqual([]);
+  expect(app.writes).toEqual([]);
+});
+test("public policies are readable before login on mobile and return to registration", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto(app.baseURL + "/start");
+  await page.getByRole("link", { name: "プライバシー", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "プライバシー・データの取り扱い", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: "output/self-service/mobile-privacy.png", fullPage: true });
+  await page.getByRole("link", { name: "利用条件", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "共有サービス版の利用条件", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: "output/self-service/mobile-terms.png", fullPage: true });
+  await page.getByRole("link", { name: "登録画面へ", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Googleで接続", exact: true })).toBeVisible();
   expect(app.writes).toEqual([]);
 });
 test("mobile registration survives refresh, never overflows and keyboard focus is visible", async ({

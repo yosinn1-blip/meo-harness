@@ -4,6 +4,8 @@ import selfHosting from "../../docs/self-hosting.md";
 import qrcode from "qrcode-generator";
 import start from "./ui/start.html";
 import account from "./ui/account.html";
+import privacy from "./ui/privacy.html";
+import terms from "./ui/terms.html";
 import script from "./ui/app.js.txt";
 import css from "./ui/style.css";
 import faq from "./ui/faq.html";
@@ -24,6 +26,9 @@ export function serveSelfPage(request, ctx = { env: {} }) {
   } else if (path === '/self/assets/report.js') {
     body = reportScript;
     type = 'text/javascript; charset=utf-8';
+  } else if (path === "/self/privacy" || path === "/self/terms") {
+    body = path === "/self/privacy" ? privacy : terms;
+    type = "text/html; charset=utf-8";
   } else if (helps[path]) {
     body = helps[path];
     type = "text/plain; charset=utf-8";

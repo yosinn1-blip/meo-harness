@@ -2,6 +2,7 @@ import { readSession } from "./session.mjs";
 import { findOwnedStore } from "./store-repository.mjs";
 import { readSelfConfig } from "./config.mjs";
 import { dateKeys } from "./contracts.mjs";
+import { draftBudgetScope } from "./budget.mjs";
 export async function getSelfStatus(ctx, request) {
   const c = readSelfConfig(ctx.env),
     s = await readSession(ctx, request);
@@ -34,7 +35,7 @@ export async function getSelfStatus(ctx, request) {
     .prepare(
       "SELECT kind,used,cap FROM usage_budgets WHERE scope=? AND period=?",
     )
-    .bind("store:" + store.id, period)
+    .bind(draftBudgetScope(store), period)
     .all();
   const pending = await ctx.db
     .prepare(

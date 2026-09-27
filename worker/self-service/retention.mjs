@@ -1,7 +1,10 @@
 import { disconnectStore } from "./lifecycle.mjs";
+import { dateKeys } from "./contracts.mjs";
 export async function purgeExpired(ctx) {
   if (!ctx.db) return;
   const n = ctx.now();
+  const usageCutoff = n - 90 * 86400000;
+  const usageMonth = dateKeys(usageCutoff).month;
   const expired = await ctx.db
     .prepare(
       "SELECT s.owner_sub FROM stores s WHERE s.state IN ('location_selected','line_pending','line_verified','ready') AND s.updated_at<? LIMIT 100",
@@ -42,6 +45,11 @@ export async function purgeExpired(ctx) {
       .bind(n - 86400000),
     ctx.db
       .prepare(
+        "DELETE FROM users WHERE sub IN (SELECT u.sub FROM users u WHERE u.created_at<? AND NOT EXISTS (SELECT 1 FROM stores s WHERE s.owner_sub=u.sub) AND NOT EXISTS (SELECT 1 FROM google_credentials c WHERE c.owner_sub=u.sub) AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.owner_sub=u.sub) AND NOT EXISTS (SELECT 1 FROM oauth_attempts a WHERE a.owner_sub=u.sub) LIMIT 100)",
+      )
+      .bind(n - 86400000),
+    ctx.db
+      .prepare(
         "UPDATE replies SET draft_ciphertext=NULL,state=CASE WHEN state='pending' THEN 'expired' ELSE state END WHERE id IN (SELECT id FROM replies WHERE expires_at<=? AND draft_ciphertext IS NOT NULL LIMIT 100)",
       )
       .bind(n),
@@ -60,5 +68,17 @@ export async function purgeExpired(ctx) {
         "DELETE FROM audit_events WHERE id IN (SELECT id FROM audit_events WHERE created_at<? LIMIT 100)",
       )
       .bind(n - 30 * 86400000),
+    // Never expire the current month's cap or a lifetime active-slot reservation.
+    // Keep late-created reservations until they too have aged for 90 days.
+    ctx.db
+      .prepare(
+        "DELETE FROM usage_reservations WHERE id IN (SELECT r.id FROM usage_reservations r WHERE (r.kind<>'active' AND r.period GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]' AND r.period<? AND r.created_at<?) OR (r.kind='active' AND r.state='released' AND NOT EXISTS (SELECT 1 FROM stores s WHERE r.id='active:'||s.id)) LIMIT 100)",
+      )
+      .bind(usageMonth, usageCutoff),
+    ctx.db
+      .prepare(
+        "DELETE FROM usage_budgets WHERE rowid IN (SELECT b.rowid FROM usage_budgets b WHERE b.kind<>'active' AND b.period GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]' AND b.period<? AND NOT EXISTS (SELECT 1 FROM usage_reservations r WHERE r.scope=b.scope AND r.period=b.period AND r.kind=b.kind) LIMIT 100)",
+      )
+      .bind(usageMonth),
   ]);
 }

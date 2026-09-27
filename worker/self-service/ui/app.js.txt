@@ -363,7 +363,19 @@ async function render() {
     checkbox.type = "checkbox";
     checkbox.id = "terms";
     label.append(checkbox, document.createTextNode("利用条件を確認しました"));
+    const policies = node("p", undefined, "small");
+    for (const [title, path] of [
+      ["利用条件", "/self/terms"],
+      ["プライバシー", "/self/privacy"],
+    ]) {
+      const link = node("a", title + "（別タブ）");
+      link.href = path;
+      link.target = "_blank";
+      link.rel = "noopener";
+      policies.append(link, document.createTextNode(" "));
+    }
     root.append(
+      policies,
       label,
       button("利用を開始する", async () => {
         if (!checkbox.checked) {

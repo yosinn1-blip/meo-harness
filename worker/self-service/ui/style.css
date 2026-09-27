@@ -280,6 +280,29 @@ footer {
   .help-layout .button, .help-layout button { max-width: 100%; }
   .help-topics { gap: 10px 18px; }
 }
+.policy {
+  max-width: 840px;
+  margin: 20px auto 60px;
+  padding: 28px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow-wrap: anywhere;
+}
+.policy h1 {
+  font-size: 28px;
+  line-height: 1.5;
+}
+.policy h2 {
+  margin-top: 32px;
+}
+.policy li {
+  margin-bottom: 8px;
+}
+.policy nav a {
+  display: inline-block;
+  margin: 8px 20px 8px 0;
+}
 a {
   color: var(--blue);
 }
