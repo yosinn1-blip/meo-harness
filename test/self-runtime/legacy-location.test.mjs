@@ -1,0 +1,41 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { withD1, applySchema } from '../support/self-runtime.mjs';
+import { buildWorker } from '../../scripts/build-self-test.mjs';
+import { claimLocation } from '../../worker/self-service/store-repository.mjs';
+import { createSelfContext } from '../../worker/self-service/config.mjs';
+
+test('actual legacy location route saves a new owned location with D1 enabled and keeps both claims after KV failure', async t => {
+  const { db, mf } = await withD1(t);
+  await applySchema(db);
+  const kv = await mf.getKVNamespace('STORES');
+  const worker = (await import(await buildWorker())).default;
+  const originalFetch = globalThis.fetch;
+  const unexpected = [];
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async input => {
+    const u = new URL(input instanceof Request ? input.url : input);
+    if (u.href === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'fixture-token' });
+    if (u.origin === 'https://mybusinessaccountmanagement.googleapis.com' && u.pathname === '/v1/accounts') return Response.json({ accounts: [{ name: 'accounts/1' }] });
+    if (u.origin === 'https://mybusinessbusinessinformation.googleapis.com' && u.pathname === '/v1/accounts/1/locations') return Response.json({ locations: [2, 3, 4].map(n => ({ name: `locations/${n}`, title: 'Fixture' })) });
+    unexpected.push(u.origin + u.pathname);
+    throw new Error('UNEXPECTED_EXTERNAL_IO');
+  };
+  await kv.put('store:fixture', JSON.stringify({ gbpAccountId: 'accounts/1', gbpLocationId: 'locations/2', gbpRefreshToken: 'fixture-refresh', lineUserId: 'fixture-line' }));
+  await db.prepare("INSERT INTO location_claims VALUES (?,?,'legacy')").bind('locations/2', 'legacy:fixture').run();
+  const env = { SELF_DB: db, STORES: kv, ADMIN_KEY: 'fixture-admin', GBP_OAUTH_CLIENT_ID: 'fixture-client', GBP_OAUTH_CLIENT_SECRET: 'fixture-secret' };
+  const select = (id, config = env) => worker.fetch(new Request('https://meo.test/admin/stores/fixture/gbp/location', { method: 'PUT', headers: { 'X-Admin-Key': 'fixture-admin', 'Content-Type': 'application/json' }, body: JSON.stringify({ gbpAccountId: 'accounts/1', gbpLocationId: `locations/${id}` }) }), config, {});
+  assert.equal((await select(3)).status, 200);
+  const saved = JSON.parse(await kv.get('store:fixture'));
+  assert.equal(saved.gbpLocationId, 'locations/3');
+  assert.equal(saved.gbpRefreshToken, 'fixture-refresh');
+  assert.equal(saved.lineUserId, 'fixture-line');
+  const failed = await select(4, { ...env, STORES: { get: (...args) => kv.get(...args), put: async () => { throw new Error('fixture KV write failure'); } } });
+  assert.equal(failed.status, 500);
+  assert.equal(JSON.parse(await kv.get('store:fixture')).gbpLocationId, 'locations/3');
+  const ctx = createSelfContext({ SELF_DB: db });
+  for (const n of [2, 3, 4]) await assert.rejects(() => claimLocation(ctx, { sub: 'other-owner', accountId: 'accounts/1', locationId: `locations/${n}`, title: 'Other' }), e => e.code === 'LOCATION_UNAVAILABLE');
+  assert.equal((await select(4)).status, 200);
+  assert.equal(JSON.parse(await kv.get('store:fixture')).gbpLocationId, 'locations/4');
+  assert.deepEqual(unexpected, []);
+});

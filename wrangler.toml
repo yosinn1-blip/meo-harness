@@ -11,6 +11,13 @@ preview_urls = false
 binding = "STORES"
 id = "8bcb74e16c5d4f46a440b20856e44de9"
 
+# 共有サービス専用DB。既存KV店舗は移行せず、location_claimsだけ予約する。
+[[d1_databases]]
+binding = "SELF_DB"
+database_name = "meo-harness-self-service"
+database_id = "2ab45bdf-d704-4aed-9e44-fe3ea6038169"
+migrations_dir = "migrations"
+
 # ── Secrets（値は .dev.vars / Workers Secrets で供給） ────────────────────────
 # GROQ_API_KEY             : AI返信エンジン（Groq、無料枠）
 # ADMIN_KEY                : /admin/* 管理エンドポイントの認証キー
@@ -26,6 +33,14 @@ id = "8bcb74e16c5d4f46a440b20856e44de9"
 VERSION = "0.1.0"
 SELF_REGISTRATION_ENABLED = "false"
 SELF_PROCESSING_ENABLED = "false"
+SELF_PUBLIC_ORIGIN = "https://meo-harness.yosinn1.workers.dev"
+# 閉鎖状態での本番準備。実接続検証と利用枠確定までは0を維持する。
+SELF_MAX_ACTIVE_STORES = "0"
+SELF_MONTHLY_DRAFT_LIMIT = "0"
+SELF_MONTHLY_PUSH_LIMIT = "0"
+SELF_LEGACY_PUSH_RESERVE = "180"
+SELF_LINE_FRIEND_URL = "https://line.me/R/ti/p/@477byprh"
+SELF_TERMS_VERSION = "2026-09-27"
 
 # ── Cron Trigger: タイムゾーン対応ダイジェスト（毎時実行・各店舗の現地9:00に送信）──
 # utcOffset=+9(JST/KST)→UTC 0:00, utcOffset=+1(BST)→UTC 8:00, utcOffset=-5(EST)→UTC 14:00

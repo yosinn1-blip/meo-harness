@@ -1,4 +1,5 @@
 import { SelfError, ensure } from "./errors.mjs";
+import { sha256 } from "./crypto.mjs";
 export function mapStore(row) {
   if (!row) return null;
   return {
@@ -101,30 +102,29 @@ export async function claimLocation(
 export async function reserveLegacyLocations(ctx, rows) {
   for (const row of rows) {
     ensure(/^locations\/\d+$/.test(row.locationId), "INVALID_LOCATION");
-    const existing = await ctx.db
-      .prepare(
-        "SELECT * FROM location_claims WHERE location_id=? OR store_id=?",
-      )
-      .bind(row.locationId, `legacy:${row.storeId}`)
-      .first();
-    if (existing) {
-      ensure(
-        existing.mode === "legacy" &&
-          existing.location_id === row.locationId &&
-          existing.store_id === `legacy:${row.storeId}`,
-        "LOCATION_UNAVAILABLE",
-        409,
-      );
-      continue;
-    }
+    ensure(typeof row.storeId === "string" && row.storeId.length > 0, "INVALID_LOCATION");
+    // KV saves and D1 reservations are not one transaction. Keep the old
+    // location protected if a selection changes, fails, or races another save.
+    // The separate prefix cannot collide with an original `legacy:<storeId>`.
+    const claimId = `legacy-location:${await sha256(row.storeId)}:${row.locationId}`;
     try {
       await ctx.db
-        .prepare("INSERT INTO location_claims VALUES (?,?,'legacy')")
-        .bind(row.locationId, `legacy:${row.storeId}`)
+        .prepare("INSERT INTO location_claims VALUES (?,?,'legacy') ON CONFLICT(location_id) DO NOTHING")
+        .bind(row.locationId, claimId)
         .run();
     } catch {
       throw new SelfError("LOCATION_UNAVAILABLE", 409);
     }
+    const existing = await ctx.db
+      .prepare("SELECT * FROM location_claims WHERE location_id=?")
+      .bind(row.locationId)
+      .first();
+    ensure(
+      existing?.mode === "legacy" &&
+        (existing.store_id === claimId || existing.store_id === `legacy:${row.storeId}`),
+      "LOCATION_UNAVAILABLE",
+      409,
+    );
   }
   return { count: rows.length };
 }
