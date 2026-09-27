@@ -44,3 +44,12 @@ E2Eは架空プロバイダであり、実GoogleのGBP権限・実店舗・LINE�
 - 一般利用/記事公開gateはfalseのまま。既存のKV店の予約は解放しない。
 
 秘密を含まない証跡はignoredの `output/self-service/final-launch/pilot-live-verified.json` と `pilot-google-account-handoff.png`。認可URL・Cookie・Google subject・allowlist hashは記録しない。
+
+
+## Google接続成功後の確認
+
+本人の操作後、実ブラウザは `/account` の店舗選択画面に戻り、GBP店舗一覧の取得成功を確認した。本番D1はGBP資格情報1件、自己登録店舗0件、自己登録claim0件、legacy claim1件。前段の「GBP資格情報0件」「権限許可待ち」は接続前の記録。
+
+現在の候補は `Yoshiki Apps` 1件で、既存legacy予約済み。美容院は現在の一覧に表示されていない。既存店の選択・予約解除・別店舗の推測登録は行わず、試用する美容院の店名またはGoogleマップURLを本人へ確認した。管理権限不足・Googleアカウント違いなどの原因はまだ未確定。
+
+実Google接続成功と、サービス全体の実運用開始は別。LINE本人確認・口コミ取得・停止/切断の実証が残るため、公開gateは引き続きfalse。今回は読み取り検証と記録のみで、デプロイ・認証変更・LINE送信・口コミ公開なし。証跡は `output/self-service/final-launch/pilot-google-connected.json` と `pilot-google-connected-store-list.png`。外部実装委譲の対象なし。
