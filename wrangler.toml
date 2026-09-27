@@ -27,6 +27,7 @@ migrations_dir = "migrations"
 # GBP_OAUTH_CLIENT_ID      : Google Cloud Console OAuth クライアント ID
 # GBP_OAUTH_CLIENT_SECRET  : Google Cloud Console OAuth クライアントシークレット
 # LINE_CHANNEL_SECRET      : LINE Bot チャネルシークレット（Webhook 署名検証）
+# TURNSTILE_SECRET_KEY      : 自己登録/ログインのサーバー側検証（公開しない）
 # GMAIL_REFRESH_TOKEN      : Gmail OAuth refresh_token（GBP 承認前メール監視）
 
 [vars]
@@ -34,6 +35,7 @@ VERSION = "0.1.0"
 SELF_REGISTRATION_ENABLED = "false"
 SELF_PROCESSING_ENABLED = "false"
 SELF_PUBLIC_ORIGIN = "https://meo-harness.yosinn1.workers.dev"
+TURNSTILE_SITE_KEY = "0x4AAAAAAFE6uTVTTIAlwcWr"
 # 閉鎖状態での本番準備。実接続検証と利用枠確定までは0を維持する。
 SELF_MAX_ACTIVE_STORES = "0"
 SELF_MONTHLY_DRAFT_LIMIT = "0"
