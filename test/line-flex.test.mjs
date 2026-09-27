@@ -15,6 +15,13 @@ test('buildReviewBubble: replyId あり → 承認/スキップ 2ボタン', () 
   assert.equal(buttons[1].action.data, 'skip:uuid-1');
 });
 
+test('buildReviewBubble: 自己登録版（editable）は「送信」「編集する」の2つだけ', () => {
+  const bubble = buildReviewBubble({ replyId: 'ss_1', review: sampleReview, bizName: 'テスト店', editable: true, rev: 2 });
+  const buttons = bubble.footer.contents;
+  assert.deepEqual(buttons.map((b) => b.action.label), ['送信', '編集する']);
+  assert.deepEqual(buttons.map((b) => b.action.data), ['approve:ss_1:r2', 'edit:ss_1']);
+});
+
 test('buildReviewBubble: replyId なし → 確認済みボタン 1つ', () => {
   const bubble = buildReviewBubble({ replyId: null, review: sampleReview });
   const buttons = bubble.footer.contents;

@@ -3,6 +3,8 @@ import aiSetup from "../../docs/ai-setup.md";
 import selfHosting from "../../docs/self-hosting.md";
 import qrcode from "qrcode-generator";
 import start from "./ui/start.html";
+import home from "./ui/home.html";
+import homeCss from "./ui/home.css";
 import account from "./ui/account.html";
 import privacy from "./ui/privacy.html";
 import terms from "./ui/terms.html";
@@ -28,6 +30,12 @@ export function serveSelfPage(request, ctx = { env: {} }) {
   ) {
     body = 'google-site-verification: ' + verificationFile;
     type = 'text/plain; charset=utf-8';
+  } else if (path === "/") {
+    body = home;
+    type = "text/html; charset=utf-8";
+  } else if (path === "/self/assets/home.css") {
+    body = homeCss;
+    type = "text/css; charset=utf-8";
   } else if (supportPage) {
     body = path === '/self/help/faq' ? faq : report;
     type = 'text/html; charset=utf-8';
@@ -69,7 +77,9 @@ export function serveSelfPage(request, ctx = { env: {} }) {
       "Cache-Control": "no-store",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy": supportPage
+      "Content-Security-Policy": path === "/"
+        ? "default-src 'none'; script-src 'none'; style-src 'self'; img-src 'self'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        : supportPage
         ? "default-src 'self'; script-src 'self'; connect-src 'none'; frame-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
         : "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     },

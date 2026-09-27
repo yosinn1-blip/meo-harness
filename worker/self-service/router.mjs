@@ -30,6 +30,7 @@ export async function handleSelfRequest(request, env, ctx) {
   const u = new URL(request.url),
     path = u.pathname;
   if (
+    path === "/" ||
     path === "/start" ||
     path === "/account" ||
     /^\/google[a-f0-9]{16}\.html$/.test(path) ||

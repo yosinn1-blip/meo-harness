@@ -149,3 +149,19 @@ test("self-service database failure does not suppress the existing KV scheduler"
   await worker.scheduled({}, env, {});
   assert.deepEqual(prefixes, ["pending:", "store:"]);
 });
+test('top page explains the service without auth or DB and leads to registration', async () => {
+  const response = await worker.fetch(new Request('https://meo.test/'), {
+    SELF_DB: { prepare() { throw new Error('Top page must not use the DB'); } },
+  }, {});
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8');
+  assert.equal(response.headers.get('Set-Cookie'), null);
+  assert.match(response.headers.get('Content-Security-Policy'), /script-src 'none'/);
+  const html = await response.text();
+  for (const text of ['「送信」', '編集する', '申し込み不要', '先着10店舗', '運営者', 'yosinn1@gmail.com', 'href="/start"', 'href="/self/privacy"', 'href="/self/terms"'])
+    assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /スキップ|承認して送信|<script/);
+  const css = await worker.fetch(new Request('https://meo.test/self/assets/home.css'), {}, {});
+  assert.equal(css.status, 200);
+  assert.equal(css.headers.get('Content-Type'), 'text/css; charset=utf-8');
+});
