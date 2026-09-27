@@ -294,7 +294,7 @@ async function processReviews(reviews, store, storeId, env) {
         business: { type: businessType ?? '店舗', name: businessName ?? storeId },
         provider: PROVIDERS.GROQ,
         providerConfig: { apiKey: env.GROQ_API_KEY },
-      }).then(r => ({ ...review, draft: r.text, warnings: r.warnings, tokens: r.tokens }))
+      }).then(r => ({ ...review, replyId: undefined, draft: r.text || null, warnings: r.warnings, tokens: r.tokens }))
     )
   );
 
@@ -308,22 +308,7 @@ async function processReviews(reviews, store, storeId, env) {
 
   // GBP 由来のレビューは reply:{uuid} エントリを作成してボタン付き Flex Message を送る
   const processedWithReplyIds = await Promise.all(
-    processed.map(async review => {
-      // 下書きが無いと「承認して送信」で空の返信を投稿してしまうので、承認ボタンを出さない
-      if (!review.reviewId || !review.draft) return review;
-      const replyId = crypto.randomUUID();
-      await env.STORES.put(`reply:${replyId}`, JSON.stringify({
-        storeId,
-        reviewId: review.reviewId,
-        draft: review.draft,
-        gbpAccountId: store.gbpAccountId,
-        gbpLocationId: store.gbpLocationId,
-        star: review.star,
-        text: review.text,
-        name: review.name,
-      }), { expirationTtl: 7 * 24 * 3600 });
-      return { ...review, replyId };
-    })
+    processed.map(review => storeDraftForApproval(review, store, storeId, env))
   );
 
   if (shouldSendDigest(store)) {
@@ -336,6 +321,24 @@ async function processReviews(reviews, store, storeId, env) {
 
   const notifyResult = await sendDigest({ store: withEnvCredentials(store, env), reviews: processedWithReplyIds });
   return { buffered: false, processed: processed.length, failed, notify: notifyResult };
+}
+
+async function storeDraftForApproval(review, store, storeId, env) {
+  // A regenerated draft must be stored under the ID shown with that exact text.
+  // Missing/blocked drafts never inherit an old approval ID.
+  if (!review.reviewId || !review.draft) return { ...review, replyId: undefined };
+  const replyId = crypto.randomUUID();
+  await env.STORES.put(`reply:${replyId}`, JSON.stringify({
+    storeId,
+    reviewId: review.reviewId,
+    draft: review.draft,
+    gbpAccountId: store.gbpAccountId,
+    gbpLocationId: store.gbpLocationId,
+    star: review.star,
+    text: review.text,
+    name: review.name,
+  }), { expirationTtl: 7 * 24 * 3600 });
+  return { ...review, replyId };
 }
 
 // ── Cron: pending バッファの処理 ──────────────────────────────────────────────
@@ -369,15 +372,18 @@ async function handlePendingStore(pendingKey, env, utcHour) {
         business: { type: store.businessType ?? '店舗', name: store.businessName ?? storeId },
         provider: PROVIDERS.GROQ,
         providerConfig: { apiKey: env.GROQ_API_KEY },
-      }).then(r => ({ ...review, draft: r.text, warnings: r.warnings }))
+      }).then(r => ({ ...review, replyId: undefined, draft: r.text || null, warnings: r.warnings }))
     )
   );
 
   const processed = settled.map((r, i) =>
-    r.status === 'fulfilled' ? r.value : { ...reviews[i], draft: null }
+    r.status === 'fulfilled' ? r.value : { ...reviews[i], replyId: undefined, draft: null }
   );
 
-  await sendDigest({ store: withEnvCredentials(store, env), reviews: processed });
+  const processedWithReplyIds = await Promise.all(
+    processed.map(review => storeDraftForApproval(review, store, storeId, env))
+  );
+  await sendDigest({ store: withEnvCredentials(store, env), reviews: processedWithReplyIds });
   await env.STORES.delete(pendingKey);
 }
 

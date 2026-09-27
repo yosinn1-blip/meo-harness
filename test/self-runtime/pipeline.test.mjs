@@ -14,7 +14,7 @@ import {
 } from "../../worker/self-service/ingestion.mjs";
 import { sendSelfDigest } from "../../worker/self-service/notifications.mjs";
 import { pauseStore } from "../../worker/self-service/lifecycle.mjs";
-async function setup(t, { drafts = "1", timeout = false } = {}) {
+async function setup(t, { drafts = "1", timeout = false, aiText = "ご来店ありがとうございました。" } = {}) {
   const { db } = await withD1(t);
   await applySchema(db);
   const calls = { ai: 0, push: [], pages: [] };
@@ -48,7 +48,7 @@ async function setup(t, { drafts = "1", timeout = false } = {}) {
           calls.ai++;
           return Response.json({
             choices: [
-              { message: { content: "ご来店ありがとうございました。" } },
+              { message: { content: aiText } },
             ],
             usage: { total_tokens: 10 },
           });
@@ -79,6 +79,17 @@ async function setup(t, { drafts = "1", timeout = false } = {}) {
   await seedGoogleCredential(ctx);
   return { ctx, store, calls };
 }
+test("invalid AI language creates no approval or LINE push and still consumes its draft unit", async (t) => {
+  const { ctx, store, calls } = await setup(t, { aiText: 'Thank you for your review.' });
+  await pollSelfStore(ctx, store.id);
+  await processSelfJobs(ctx, { limit: 1 });
+  assert.equal(calls.ai, 1, 'self-service maxRetries=0 must remain unchanged');
+  assert.equal((await ctx.db.prepare('SELECT count(*) n FROM replies').first()).n, 0);
+  assert.equal((await ctx.db.prepare("SELECT used FROM usage_budgets WHERE kind='draft'").first()).used, 1);
+  assert.equal((await ctx.db.prepare('SELECT last_error FROM stores WHERE id=?').bind(store.id).first()).last_error, 'DRAFT_RETRY_REQUIRED');
+  await sendSelfDigest(ctx, store.id);
+  assert.equal(calls.push.length, 0);
+});
 test("poll persists all pages, deduplicates; zero draft budget keeps backlog and calls no AI", async (t) => {
   const { ctx, store, calls } = await setup(t, { drafts: "0" });
   await pollSelfStore(ctx, store.id);

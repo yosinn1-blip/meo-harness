@@ -20,7 +20,7 @@ export function buildReviewBubble({ replyId, review, bizName }) {
   const reviewText = truncate(review.text, 1000);
   const draftText = truncate(review.draft ?? '', 1500);
   const needsFullDraft = Boolean(review.fullTextUrl && (review.draft ?? '').length > 1500);
-  const hasReplyId = Boolean(replyId) && !needsFullDraft;
+  const hasReplyId = Boolean(replyId) && Boolean(draftText) && !needsFullDraft;
 
   const footerContents = hasReplyId
     ? [
