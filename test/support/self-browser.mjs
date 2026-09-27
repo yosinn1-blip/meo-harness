@@ -74,6 +74,7 @@ export async function startTestApp() {
     reviews: [],
     quota: 200,
     consumed: 0,
+    aiText: "ご来店ありがとうございました。またお会いできることを楽しみにしています。",
   };
   let env, ctx, baseURL, lastPin;
   const originalFetch = globalThis.fetch;
@@ -130,8 +131,7 @@ export async function startTestApp() {
         choices: [
           {
             message: {
-              content:
-                "ご来店ありがとうございました。またお会いできることを楽しみにしています。",
+              content: settings.aiText,
             },
           },
         ],

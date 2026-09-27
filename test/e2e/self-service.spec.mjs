@@ -311,3 +311,20 @@ test("unfinished Google connection exposes disconnect before store selection", a
     page.getByRole("button", { name: "Googleで接続", exact: true }),
   ).toBeVisible();
 });
+
+test("wrong-language draft stays in processing backlog with no approval or Google write", async ({ page }) => {
+  await onboard(page);
+  const date = new Date(Date.now() - 3600000).toISOString();
+  await fixture(page, 'scenario', {
+    aiText: 'Thank you for your review.',
+    reviews: [{ reviewId: 'quality-held', comment: '良かったです', starRating: 'FIVE', createTime: date, updateTime: date }],
+  });
+  const pushesBefore = app.pushes.length;
+  await fixture(page, 'cron');
+  await page.getByRole('button', { name: '状態を更新', exact: true }).click();
+  await expect(page.getByText('処理待ちの口コミ: 1件。利用枠や接続の確認後に順次処理します。', { exact: true })).toBeVisible();
+  await expect(page.getByText('Thank you for your review.', { exact: true })).toHaveCount(0);
+  expect(app.pushes.length).toBe(pushesBefore);
+  expect(app.writes).toEqual([]);
+  await page.screenshot({ path: 'output/self-service/quality-held.png', fullPage: true });
+});

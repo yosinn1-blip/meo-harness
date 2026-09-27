@@ -150,10 +150,10 @@ test("buildSystemPrompt: lang=en・医療系は英語の免責文言を含む", 
   assert.match(prompt, /guarantee|treatment|medical|outcome/i);
 });
 
-test("buildSystemPrompt: lang=ko は韓国語プロンプトを返す", () => {
+test("buildSystemPrompt: lang=ko は韓国語での返信を明示する", () => {
   const prompt = buildSystemPrompt({ bizType: "헤어살롱", bizName: "소피아", lang: "ko" });
   assert.doesNotMatch(prompt, /あなたは/, "should not contain Japanese");
-  assert.match(prompt, /respond.*language|same language/i);
+  assert.match(prompt, /reply language: Korean/i);
 });
 
 test("buildSystemPrompt: lang 未指定は日本語プロンプトのまま", () => {
