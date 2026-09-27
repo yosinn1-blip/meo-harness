@@ -38,3 +38,9 @@ Google開始に失敗した後に同じ一回限りトークンを再送する�
 Google同意、承認された店舗の接続、LINE確認番号、停止/切断、初期受付枠、Google表示/審査状態、公開承認の確認が残る。実口コミへの投稿、LINE送信、AI生成、課金、記事公開はこの作業では行っていない。
 
 外部委譲はMEOが安全リスト外かつ本番認証設定を含むため省略。内部の読み取りレビューを外部委譲の代替とは数えない。秘密を含まない実行結果はignoredの `output/self-service/final-launch/`、テストログは同名のworktree側ディレクトリに保存。
+
+## 14:40 JST 最終反映
+
+復旧UIのcommit `68ab2756013b4a0aca7133f88e2e2031f58e5507` をmainへfast-forward統合し、version `6de98abf-a8bc-496e-afe4-9dcb0ba13f53` / deployment `2dac2408-beb9-4e0a-8c55-067e13be2a22` を100%配信した。bundle SHA-256は `6a22a0ad45a9512163220d31d40b2bd2ca1884cf0fc2c7424095f503e5589161`。全bindingを保持し、受付/処理false・上限0を再確認。公開app.jsのhashもローカルソースに一致。unit208/runtime57/E2E23のログ、元終了コード0、レビュー結果を確認してから反映した。
+
+本番D1はstores0、google_credentials0、legacy location_claims1。Googleアカウント選択画面のままで、本人ログイン・対象店舗の回答待ち。記事は未公開。公開判定は引き続きready:falseであり、この記録を一般利用開始の証拠にしない。Googleログインの待機が長い場合は、本人操作の前に `/start` から新しいログイン要求を発行する（OAuth stateの期限切れを過去の接続不具合と混同しない）。
