@@ -497,8 +497,8 @@ async function handleLinePostback(event, env) {
       await postGbpReply({ accessToken, accountId: gbpAccountId, locationId: gbpLocationId, reviewId, comment: draft });
     } catch (err) {
       // 押した人に何も返らないと、投稿されたと思い込むので失敗も LINE に返す
-      // 承認待ちデータは残すので、もう一度「承認して送信」を押せば再送できる（Google の返信は上書きなので二重投稿にはならない）
-      await pushLineText(store, userId, `❌ Google への返信投稿に失敗しました。時間をおいて、もう一度「承認して送信」を押してください。\n${err.message.slice(0, 120)}`);
+      // 承認待ちデータは残すので、もう一度「送信」を押せば再送できる（Google の返信は上書きなので二重投稿にはならない）
+      await pushLineText(store, userId, `❌ Google への返信投稿に失敗しました。時間をおいて、もう一度「送信」を押してください。\n${err.message.slice(0, 120)}`);
       throw err;
     }
     await env.STORES.delete(`reply:${replyId}`);
@@ -538,7 +538,7 @@ async function handleLineLink(event, env, code) {
   await env.STORES.put(`store:${storeId}`, JSON.stringify(store));
   await env.STORES.delete(`line-link:${code}`);
   await replyLineText(env, event.replyToken,
-    `✅ 「${store.businessName ?? storeId}」の口コミ通知をこのLINEに届けます。\n新しい口コミが来たら、AIの返信案と「承認して送信」ボタンが届きます。`);
+    `✅ 「${store.businessName ?? storeId}」の口コミ通知をこのLINEに届けます。\n新しい口コミが来たら、AIの返信案と「送信」ボタンが届きます。`);
 }
 
 async function replyLineText(env, replyToken, text) {

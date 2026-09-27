@@ -11,7 +11,7 @@ const messages = {
   REVIEW_CONFLICT:
     "口コミが更新されたか、すでに別の返信があります。上書きせず停止しました。Google上の内容を確認してください。",
   REAPPROVAL_REQUIRED:
-    "まだ投稿されていないことを確認しました。同じ返信案を投稿する場合は、内容を確認してもう一度「承認して送信」を押してください。",
+    "まだ投稿されていないことを確認しました。同じ返信案を投稿する場合は、内容を確認してもう一度「送信」を押してください。",
   POST_RESULT_UNKNOWN:
     "Googleへの送信結果はまだ未確認です。自動で再投稿せず、照合します。アカウント画面で結果を確認してください。",
   POST_CHECK_FAILED:
@@ -32,8 +32,8 @@ const messages = {
   EDIT_INVALID:
     "返信文が空か、1200字を超えています。もう一度送ってください。やめる場合は「やめる」と送ってください。",
   DRAFT_CHANGED:
-    "この返信案は編集されています。最新の確認カードから「承認して送信」を押してください。",
-  DRAFT_EDITED: "この内容でGoogleに返信しますか？ よければ「承認して送信」を押してください。",
+    "この返信案は編集されています。最新の確認カードから「送信」を押してください。",
+  DRAFT_EDITED: "この内容でGoogleに返信しますか？ よければ「送信」を押してください。",
 };
 // Conversational steps: the account URL would only add noise.
 const noAccountLink = new Set(["EDIT_WAITING", "EDIT_CANCELLED", "EDIT_INVALID", "DRAFT_EDITED"]);
