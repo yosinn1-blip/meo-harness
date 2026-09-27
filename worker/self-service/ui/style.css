@@ -223,8 +223,62 @@ footer {
   border-top: 1px solid var(--line);
   padding-top: 18px;
   display: flex;
+  flex-wrap: wrap;
   gap: 25px;
   font-size: 13px;
+}
+.help-layout {
+  max-width: 850px;
+  margin: 28px auto 64px;
+  padding: 0 32px;
+}
+.help-heading h1 {
+  font-size: clamp(26px, 4vw, 34px);
+  line-height: 1.5;
+  letter-spacing: -0.8px;
+  margin: 0 0 16px;
+}
+.help-heading p, .field-hint { color: var(--muted); }
+.help-topics { display: flex; gap: 12px 25px; flex-wrap: wrap; margin: 28px 0 40px; }
+.faq-group { margin: 40px 0; scroll-margin-top: 24px; }
+.faq-group details { border-bottom: 1px solid var(--line); padding: 12px 0; }
+.faq-group details[open] { padding-bottom: 18px; }
+.faq-group details p { margin: 12px 0; max-width: 44em; }
+.faq-group summary { font-size: 16px; }
+.help-contact { margin: 40px 0; padding-top: 26px; border-top: 1px solid var(--line); }
+.help-notice { border-left: 3px solid var(--green); padding: 4px 0 4px 20px; margin: 28px 0; }
+.help-notice p { margin: 10px 0; font-size: 14px; }
+.report-form { background: var(--white); border: 1px solid var(--line); border-radius: 12px; padding: 28px; }
+.report-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.report-form legend { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+.report-form label { font-weight: 600; font-size: 15px; }
+.help-layout textarea, .report-form select, .report-form input[type="datetime-local"] {
+  display: block;
+  font: inherit;
+  font-size: 16px;
+  border: 1px solid var(--muted);
+  border-radius: 6px;
+  padding: 10px 12px;
+  width: 100%;
+  min-width: 0;
+  margin: 7px 0;
+  background: var(--white);
+  color: var(--ink);
+}
+.help-layout textarea { resize: vertical; overflow-wrap: anywhere; }
+.field-hint { font-size: 12px; margin: 0 0 20px; }
+.report-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.report-row > div { min-width: 0; }
+.report-consent { display: flex; align-items: flex-start; line-height: 1.8; }
+.report-consent input { flex-shrink: 0; margin-top: 4px; }
+#copy-status { color: var(--ink); overflow-wrap: anywhere; }
+#preview-subject, #preview-recipient { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .help-layout { padding: 0 20px; margin-top: 20px; }
+  .report-form { padding: 20px 16px; }
+  .report-row { grid-template-columns: 1fr; gap: 0; }
+  .help-layout .button, .help-layout button { max-width: 100%; }
+  .help-topics { gap: 10px 18px; }
 }
 a {
   color: var(--blue);

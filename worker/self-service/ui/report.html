@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>問題を報告・相談する | MEO Harness</title>
+    <link rel="stylesheet" href="/self/assets/style.css" />
+    <script src="/self/assets/report.js" defer></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand" href="/start">MEO <span>Harness</span></a>
+      <a href="/self/help/faq">よくある質問</a>
+    </header>
+    <main class="help-layout">
+      <header class="help-heading">
+        <h1>問題を報告・相談する</h1>
+        <p>困っている内容を整理して、メールで運営者に伝えます。</p>
+      </header>
+      <aside class="help-notice" aria-label="送信前のご案内">
+        <strong>この画面では送信されません。</strong>
+        <p>入力 → 内容を確認 → メールアプリから送信、の順で進みます。入力内容の自動送信や、このサービスへのフォーム内容の保存は行いません。</p>
+        <p>パスワード・認証コード・確認番号・APIキーは書かないでください。お客様の名前・電話番号、口コミ全文、Google認証画面のURLも不要です。</p>
+      </aside>
+      <p id="form-unavailable" class="help-notice">入力フォームが利用できない場合は、下のメール窓口へ、行った操作・起きたこと・発生時刻をお知らせください。</p>
+      <form id="report-form" class="report-form" autocomplete="off">
+        <fieldset id="report-fields" disabled>
+          <legend>わかる範囲で教えてください</legend>
+          <label for="category">相談する内容</label>
+          <select id="category" required>
+            <option value="">選んでください</option>
+            <option value="google">Google接続・ログイン</option>
+            <option value="line">LINEの登録・通知</option>
+            <option value="draft">AIの返信案</option>
+            <option value="posting">Googleへの投稿結果</option>
+            <option value="account">停止・切断・データ</option>
+            <option value="other">使い方・その他</option>
+          </select>
+          <label for="store">お店の名前（任意）</label>
+          <input id="store" type="text" maxlength="80" placeholder="例：○○美容室" />
+          <div class="report-row">
+            <div><label for="occurred">発生した日時（任意）</label><input id="occurred" type="datetime-local" /></div>
+            <div>
+              <label for="screen">どの画面ですか</label>
+              <select id="screen" required>
+                <option value="">選んでください</option>
+                <option value="start">利用開始・接続の画面</option>
+                <option value="account">アカウント画面</option>
+                <option value="line">LINE</option>
+                <option value="google">Googleビジネスプロフィール</option>
+                <option value="other">その他・わからない</option>
+              </select>
+            </div>
+          </div>
+          <label for="report-steps">行った操作</label>
+          <textarea id="report-steps" rows="3" maxlength="600" required placeholder="例：アカウント画面で「確認番号をLINEに送る」を押した" aria-describedby="steps-hint"></textarea>
+          <p class="field-hint" id="steps-hint">手順がわからない場合は「わからない」で構いません。600文字まで。</p>
+          <label for="description">起きたこと・相談したいこと</label>
+          <textarea id="description" rows="5" maxlength="1000" required placeholder="例：番号が届かず、画面に「送信結果を確認できません」と出た" aria-describedby="description-hint"></textarea>
+          <p class="field-hint" id="description-hint">期待していた動き、表示されたエラー、試したことなど。1000文字まで。</p>
+          <label for="device">端末・ブラウザ（任意）</label>
+          <input id="device" type="text" maxlength="80" placeholder="例：iPhone / Safari、Windows / Chrome" />
+          <label class="report-consent"><input id="privacy-check" type="checkbox" required />パスワード・認証コード・お客様の個人情報を含めていないことを確認しました</label>
+          <button type="submit">メール内容を確認する</button>
+        </fieldset>
+      </form>
+      <section id="report-preview" class="help-contact" hidden aria-labelledby="preview-title">
+        <h2 id="preview-title" tabindex="-1">送る前に確認してください</h2>
+        <p><strong>まだ送信されていません。</strong>宛先・本文を確認し、メールアプリ側で送信してください。</p>
+        <p>宛先：<span id="preview-recipient"></span><br />件名：<span id="preview-subject"></span></p>
+        <label for="report-body">メール本文</label>
+        <textarea id="report-body" rows="12" readonly></textarea>
+        <a id="open-mail" class="button">メールアプリを開く</a>
+        <button id="copy-report" type="button" class="secondary">本文をコピーする</button>
+        <p id="copy-status" role="status" aria-live="polite"></p>
+        <p class="small">メールアプリへ引き継ぐと、入力した内容がそのアプリに渡ります。開けない・本文が途中で切れる場合は、本文をコピーして普段のメールサービスから送ってください。入力を変えたら、もう一度「メール内容を確認する」を押してください。</p>
+        <p class="small">画像が必要な場合は、お客様の情報・確認番号などを隠して、メール側で添付してください。このフォームからの画像アップロードはありません。</p>
+      </section>
+      <section class="help-contact" aria-labelledby="email-title">
+        <h2 id="email-title">メール窓口</h2>
+        <p><a id="support-email" href="mailto:yosinn1@gmail.com">yosinn1@gmail.com</a></p>
+        <p>メールアプリが使えない場合は、上の宛先と作成した本文をコピーし、普段のメールサービスから送ってください。返信は送信元のメールアドレスへ行います。</p>
+        <p class="small">お問い合わせで認証情報をお聞きすることはありません。リアルタイムチャットではないため、即時返信や一定時間内の解決はお約束していません。</p>
+      </section>
+      <footer><a href="/self/help/faq">よくある質問</a><a href="/account">アカウント</a><a href="/self/help/quickstart">使い方</a></footer>
+    </main>
+  </body>
+</html>

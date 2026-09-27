@@ -6,6 +6,9 @@ import start from "./ui/start.html";
 import account from "./ui/account.html";
 import script from "./ui/app.js.txt";
 import css from "./ui/style.css";
+import faq from "./ui/faq.html";
+import report from "./ui/report.html";
+import reportScript from "./ui/report.js.txt";
 export function serveSelfPage(request, ctx = { env: {} }) {
   const path = new URL(request.url).pathname;
   let body, type;
@@ -14,7 +17,14 @@ export function serveSelfPage(request, ctx = { env: {} }) {
     "/self/help/ai-setup": aiSetup,
     "/self/help/self-hosting": selfHosting,
   };
-  if (helps[path]) {
+  const supportPage = path === '/self/help/faq' || path === '/self/help/report';
+  if (supportPage) {
+    body = path === '/self/help/faq' ? faq : report;
+    type = 'text/html; charset=utf-8';
+  } else if (path === '/self/assets/report.js') {
+    body = reportScript;
+    type = 'text/javascript; charset=utf-8';
+  } else if (helps[path]) {
     body = helps[path];
     type = "text/plain; charset=utf-8";
   } else if (path === "/self/assets/line-qr.svg") {
@@ -46,8 +56,9 @@ export function serveSelfPage(request, ctx = { env: {} }) {
       "Cache-Control": "no-store",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy":
-        "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      "Content-Security-Policy": supportPage
+        ? "default-src 'self'; script-src 'self'; connect-src 'none'; frame-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        : "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     },
   });
 }

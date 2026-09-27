@@ -58,6 +58,8 @@ test("all published help links resolve to same-origin human-readable guidance", 
     "/self/help/quickstart",
     "/self/help/ai-setup",
     "/self/help/self-hosting",
+    "/self/help/faq",
+    "/self/help/report",
   ])
     paths.add(p);
   for (const path of paths) {
@@ -67,8 +69,26 @@ test("all published help links resolve to same-origin human-readable guidance", 
       {},
     );
     assert.equal(res.status, 200, path);
-    assert.match(res.headers.get("Content-Type"), /text\/plain/);
+    assert.match(res.headers.get("Content-Type"), /text\/(plain|html)/);
     assert.ok((await res.text()).length > 200);
+  }
+});
+
+test('support pages work without login or database and never echo query secrets', async () => {
+  for (const path of ['/self/help/faq', '/self/help/report']) {
+    const response = await worker.fetch(new Request('https://meo.test' + path + '?code=private-code-fixture&token=private-token-fixture'), {
+      SELF_DB: { prepare() { throw new Error('Support must not use the DB'); } },
+    }, {});
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('Content-Type'), /text\/html/);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.equal(response.headers.get('Set-Cookie'), null);
+    assert.match(response.headers.get('Content-Security-Policy'), /form-action 'none'/);
+    const html = await response.text();
+    assert.doesNotMatch(html, /private-(code|token)-fixture/);
+    assert.doesNotMatch(html, /src="\/self\/assets\/app\.js"/);
+    const post = await worker.fetch(new Request('https://meo.test' + path, { method: 'POST', body: 'private-body-fixture' }), {}, {});
+    assert.equal(post.status, 405, 'email composer must not pretend to accept reports');
   }
 });
 test("self-service database failure does not suppress the existing KV scheduler", async () => {

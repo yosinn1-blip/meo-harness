@@ -1,0 +1,75 @@
+(() => {
+  const form = document.querySelector('#report-form');
+  const fields = document.querySelector('#report-fields');
+  const preview = document.querySelector('#report-preview');
+  const mailLink = document.querySelector('#open-mail');
+  const bodyField = document.querySelector('#report-body');
+  const copyStatus = document.querySelector('#copy-status');
+  const recipient = document.querySelector('#support-email').textContent.trim();
+  let revision = 0;
+  const value = id => document.getElementById(id).value.trim();
+  const selectedLabel = id => document.getElementById(id).selectedOptions[0].textContent;
+
+  function invalidate() {
+    revision++;
+    preview.hidden = true;
+    mailLink.removeAttribute('href');
+    bodyField.value = '';
+    copyStatus.textContent = '';
+  }
+  form.addEventListener('input', invalidate);
+  form.addEventListener('change', invalidate);
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    invalidate();
+    if (!form.reportValidity()) return;
+    // A whitespace-only report does not contain actionable details.
+    for (const id of ['report-steps', 'description']) {
+      const field = document.getElementById(id);
+      if (!field.value.trim()) {
+        field.setCustomValidity('内容を入力してください。');
+        field.reportValidity();
+        return;
+      }
+    }
+    const subject = `[MEO Harness] ご相談：${selectedLabel('category')}`;
+    const body = [
+      'MEO Harness サポート窓口 御中', '',
+      `相談内容：${selectedLabel('category')}`,
+      `お店の名前：${value('store') || '未記入'}`,
+      `発生日時：${value('occurred').replace('T', ' ') || '不明'}（送信者の現地時刻）`,
+      `画面：${selectedLabel('screen')}`,
+      `端末・ブラウザ：${value('device') || '不明'}`, '',
+      '【行った操作】', value('report-steps'), '',
+      '【起きたこと・相談したいこと】', value('description'), '',
+      '※パスワード・認証コード・お客様の個人情報を含めていないことを確認しました。',
+      '※画像が必要な場合は、個人情報等を隠してメール側で添付します。',
+    ].join('\n');
+    document.querySelector('#preview-recipient').textContent = recipient;
+    document.querySelector('#preview-subject').textContent = subject;
+    bodyField.value = body;
+    mailLink.href = `mailto:${recipient}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    preview.hidden = false;
+    document.querySelector('#preview-title').focus();
+  });
+  for (const id of ['report-steps', 'description']) {
+    document.getElementById(id).addEventListener('input', event => event.target.setCustomValidity(''));
+  }
+  document.querySelector('#copy-report').addEventListener('click', async () => {
+    if (preview.hidden || !bodyField.value) return;
+    const copiedRevision = revision;
+    try {
+      await navigator.clipboard.writeText(bodyField.value);
+      if (revision !== copiedRevision) return;
+      copyStatus.textContent = '本文をコピーしました。メール側に貼り付けて送信してください。まだ送信はしていません。';
+    } catch {
+      if (revision !== copiedRevision) return;
+      bodyField.focus();
+      bodyField.select();
+      copyStatus.textContent = '自動コピーできませんでした。選択された本文を手動でコピーしてください。まだ送信はしていません。';
+    }
+  });
+  // No fetch, query-string import, diagnostics collection, storage, or automatic sending.
+  fields.disabled = false;
+  document.querySelector('#form-unavailable').hidden = true;
+})();
