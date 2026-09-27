@@ -32,3 +32,15 @@
 E2Eは架空プロバイダであり、実GoogleのGBP権限・実店舗・LINE到達の証拠とはしない。接続後画面のスクリーンショットを目視確認し、操作が接続確認までで停止することを検証。
 
 本番の唯一の認証済み利用者を再確認し、元識別子とハッシュを出力せずSecretを未デプロイ版へ追加済み（`ee618b35-1e03-4c7b-a173-b2288b0db3d9`）。本番版はこの段階で変更なし。コード反映と実ブラウザの結果は次に追記。
+
+
+## 本番反映・引き継ぎ
+
+- 実装commit `48524e2` をmainへfast-forward統合し、bundle照合後にversion `aebed4ba-5a22-4508-9adc-af876e3fdf2f` を100%反映。deployment `dde1f1f6-c839-44c7-9064-3745f79a2cc0`。
+- Bundle SHA-256 `4938839973f8a94a49cfd1af4bb9b6354d4d9e89cf928744a63396f0b1cfa397`。本番JSはローカル原本と一致。旧Secret全件・KV/D1を維持。変更は本人限定Secret追加と接続上限0→1のみ（受付/処理false、下書き/送信0）。
+- デプロイ直後のHTTP検証は旧版の応答を観測して停止したが、CLIは終了0・APIは新版100%だった。再デプロイせず読み取り再確認で新版のpilot設定を確認した。外部伝播の一時差と整合するが厳密な原因は未特定。
+- 7公開URL 200、匿名statusはpilot=true/一般受付false/登録許可false/処理false、匿名connectは503。DBは店舗0・GBP資格情報0・自己登録claim0・legacy claim1を維持（接続開始前）。
+- 実ブラウザの既存ログインセッションで本人限定の接続ボタンが表示・有効化。新しいOAuth開始が成功しGoogleアカウント選択画面へ到達。本人が先ほどと同じアカウントを選択し、GBP権限を確認・許可する操作待ち。Google権限の最終許可・実店舗選択・LINE・口コミ投稿は未実施。
+- 一般利用/記事公開gateはfalseのまま。既存のKV店の予約は解放しない。
+
+秘密を含まない証跡はignoredの `output/self-service/final-launch/pilot-live-verified.json` と `pilot-google-account-handoff.png`。認可URL・Cookie・Google subject・allowlist hashは記録しない。
