@@ -56,7 +56,8 @@ export function readSelfConfig(env) {
 }
 export function createSelfContext(
   env,
-  { now = Date.now, fetchImpl = globalThis.fetch } = {},
+  // workerd requires its native fetch receiver, even when called as ctx.fetchImpl.
+  { now = Date.now, fetchImpl = globalThis.fetch.bind(globalThis) } = {},
 ) {
   return { env, db: env.SELF_DB, now, fetchImpl };
 }
