@@ -134,15 +134,21 @@ export async function verifyLocationAccess(
   ctx,
   actor,
   { accountId, locationId },
+  { refreshAccount = false } = {},
 ) {
   validateLocation({ accountId, locationId });
   const token = await googleAccessToken(ctx, actor.sub);
+  if(refreshAccount){
+    const account=await googleJson(ctx,`https://mybusinessaccountmanagement.googleapis.com/v1/${accountId}`,{headers:{Authorization:'Bearer '+token}});
+    ensure(account.name===accountId,'LOCATION_NOT_ACCESSIBLE',403);
+  }
   const data = await googleJson(
     ctx,
     `https://mybusinessbusinessinformation.googleapis.com/v1/${locationId}?readMask=name,title`,
     { headers: { Authorization: "Bearer " + token } },
   );
   ensure(data.name === locationId, "LOCATION_NOT_ACCESSIBLE", 403);
+  ensure(typeof data.title==='string', "LOCATION_NOT_ACCESSIBLE", 403);
   return data;
 }
 export async function selectLocation(ctx, actor, ids) {

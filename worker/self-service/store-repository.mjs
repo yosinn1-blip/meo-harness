@@ -17,6 +17,7 @@ export function mapStore(row) {
     updatedAt: row.updated_at,
     lastPolledAt: row.last_polled_at,
     lastError: row.last_error,
+    metadataFetchedAt: row.metadata_fetched_at,
   };
 }
 export async function findOwnedStore(ctx, sub) {
@@ -73,7 +74,7 @@ export async function claimLocation(
         .bind(sub, n),
       ctx.db
         .prepare(
-          "INSERT INTO stores(id,owner_sub,account_id,location_id,title,state,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
+          "INSERT INTO stores(id,owner_sub,account_id,location_id,title,state,created_at,updated_at,metadata_fetched_at) VALUES (?,?,?,?,?,?,?,?,?)",
         )
         .bind(
           id,
@@ -82,6 +83,7 @@ export async function claimLocation(
           locationId,
           String(title).slice(0, 300),
           "location_selected",
+          n,
           n,
           n,
         ),

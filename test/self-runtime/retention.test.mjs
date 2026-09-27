@@ -70,7 +70,7 @@ for (const change of ['activate','refresh']) {
     const {db}=await withD1(t);await applySchema(db);
     let clock=now;
     const ctx=createSelfContext(fixtureEnv(db),{now:()=>clock,fetchImpl:async u=>
-      Response.json(String(u).includes('/token')?{access_token:'fixture'}:{name:'locations/2',title:'架空店'})});
+      Response.json(String(u).includes('/token')?{access_token:'fixture'}:String(u).includes('mybusinessaccountmanagement')?{name:'accounts/1'}:{name:'locations/2',title:'架空店'})});
     const store=await seedStore(ctx,{state:'line_verified'});
     await seedGoogleCredential(ctx);
     clock+=2*day;

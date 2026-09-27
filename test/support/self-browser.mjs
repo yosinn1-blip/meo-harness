@@ -97,6 +97,8 @@ export async function startTestApp() {
       u.pathname === "/v1/accounts"
     )
       return Response.json({ accounts: [{ name: "accounts/1" }] });
+    if(u.hostname==='mybusinessaccountmanagement.googleapis.com' && u.pathname==='/v1/accounts/1')
+      return Response.json({name:'accounts/1'});
     if (u.hostname === "mybusinessbusinessinformation.googleapis.com") {
       if (settings.googleFailure) return Response.json({}, { status: 500 });
       if (u.pathname.endsWith("/locations"))
@@ -252,6 +254,13 @@ export async function startTestApp() {
             offset += data.ms;
             response = Response.json({ ok: true });
           } else if (url.pathname === "/fixture/cron") {
+            // Test clock only: exercise the actual production phase, not a
+            // replacement scheduler. Poll at JST 09-21; notify one hour later.
+            if(data.phase==='poll'){
+              let next=Math.ceil(now()/3600000)*3600000;
+              while(Math.floor(next/3600000)%2!==0 || new Date(next).getUTCHours()>12)next+=3600000;
+              offset+=next-now();
+            } else if(data.phase==='notify') offset+=3600000;
             await module.runSelfScheduled(ctx);
             response = Response.json({ ok: true });
           } else response = new Response(null, { status: 404 });

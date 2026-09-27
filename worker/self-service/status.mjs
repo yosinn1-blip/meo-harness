@@ -37,7 +37,7 @@ export async function getSelfStatus(ctx, request) {
     .prepare(
       "SELECT kind,used,cap FROM usage_budgets WHERE scope=? AND period=?",
     )
-    .bind(draftBudgetScope(store), period)
+    .bind(await draftBudgetScope(ctx, store, period), period)
     .all();
   const pending = await ctx.db
     .prepare(

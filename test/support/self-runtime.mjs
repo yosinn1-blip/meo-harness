@@ -37,18 +37,18 @@ export function fixtureEnv(db, overrides = {}) {
     ...overrides,
   };
 }
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import {
   claimLocation,
   findOwnedStore,
 } from "../../worker/self-service/store-repository.mjs";
 export async function applySchema(db) {
-  const sql = await readFile(
-    new URL("../../migrations/0001_self_service.sql", import.meta.url),
-    "utf8",
-  );
-  const statements = sql.match(/\s*CREATE TRIGGER[\s\S]+?END;|[^;]+;/g) || [];
-  await db.batch(statements.map((s) => db.prepare(s.trim())));
+  const directory=new URL('../../migrations/',import.meta.url);
+  for(const name of (await readdir(directory)).filter(n=>/^\d+.*\.sql$/.test(n)).sort()) {
+    const sql=await readFile(new URL(name,directory),'utf8');
+    const statements = sql.match(/\s*CREATE TRIGGER[\s\S]+?END;|[^;]+;/g) || [];
+    await db.batch(statements.map((s) => db.prepare(s.trim())));
+  }
 }
 export async function seedStore(
   ctx,

@@ -173,11 +173,16 @@ export default {
 // ── GBP ポーリング（Cron から呼び出し） ─────────────────────────────────────
 
 const GBP_FIRST_POLL_DAYS = 60;
+// Legacy records predate explicit state; only that old default and active may run.
+function legacyStoreActive(store) {
+  return Boolean(store) && (store.state === undefined || store.state === 'active');
+}
 
 async function pollGbpStore(storeKey, env) {
   const storeRaw = await env.STORES.get(storeKey);
   if (!storeRaw) return;
   const store = JSON.parse(storeRaw);
+  if (!legacyStoreActive(store)) return;
 
   const { gbpRefreshToken, gbpAccountId, gbpLocationId } = store;
   if (!gbpRefreshToken || !gbpAccountId || !gbpLocationId) return;
@@ -285,6 +290,7 @@ async function pollGmailReviews(env) {
 // ── 共通パイプライン ──────────────────────────────────────────────────────────
 
 async function processReviews(reviews, store, storeId, env) {
+  if (!legacyStoreActive(store)) return { skipped: true, code: 'STORE_PAUSED' };
   const { businessName, businessType } = store;
 
   const settled = await Promise.allSettled(
@@ -357,6 +363,7 @@ async function handlePendingStore(pendingKey, env, utcHour) {
   }
 
   const store = JSON.parse(storeRaw);
+  if (!legacyStoreActive(store)) return;
   if (!isDigestHour(store, utcHour)) return;
 
   const reviews = pendingRaw ? JSON.parse(pendingRaw) : [];
@@ -564,6 +571,7 @@ async function handleReview(request, env) {
 
   const clientKey = request.headers.get('X-API-Key') ?? '';
   if (clientKey !== store.apiKey) return jsonError('Unauthorized', 401);
+  if (!legacyStoreActive(store)) return jsonError('Store processing is paused', 409);
 
   let result;
   try {
@@ -1016,6 +1024,7 @@ async function handleNotifyTest(request, env, storeId) {
   const storeRaw = await env.STORES.get(`store:${storeId}`);
   if (!storeRaw) return jsonError(`Unknown store: ${storeId}`, 404);
   const store = JSON.parse(storeRaw);
+  if (!legacyStoreActive(store)) return jsonError('Store processing is paused', 409);
 
   const testReview = {
     star: 5,

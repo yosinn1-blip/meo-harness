@@ -29,7 +29,7 @@ export async function activateStore(ctx, actor, { termsVersion, confirmed }) {
     "LINE_VERIFICATION_REQUIRED",
     409,
   );
-  await verifyLocationAccess(ctx, actor, s);
+  const actual=await verifyLocationAccess(ctx, actor, s, {refreshAccount:true});
   try {
     await ctx.db.batch([
       storeGuard(ctx, s, ["line_verified", "ready", "paused", "active"]),
@@ -48,9 +48,9 @@ export async function activateStore(ctx, actor, { termsVersion, confirmed }) {
       }),
       ctx.db
         .prepare(
-          "UPDATE stores SET state='active',terms_version=?,updated_at=?,last_error=NULL WHERE id=?",
+          "UPDATE stores SET state='active',terms_version=?,updated_at=?,last_error=NULL,title=?,metadata_fetched_at=? WHERE id=?",
         )
-        .bind(termsVersion, ctx.now(), s.id),
+        .bind(termsVersion, ctx.now(), actual.title.slice(0,300), ctx.now(), s.id),
       ctx.db.prepare("DELETE FROM mutation_guards"),
     ]);
   } catch (e) {
@@ -79,7 +79,7 @@ export async function pauseStore(ctx, actor) {
     .run();
   return { ok: true };
 }
-export async function disconnectStore(ctx, actor, { abandoned } = {}) {
+export async function disconnectStore(ctx, actor, { abandoned, expiredMetadata } = {}) {
   ensure(actor.sub, "LOGIN_REQUIRED", 401);
   if (abandoned)
     ensure(Number.isFinite(abandoned.before) && abandoned.storeId, "INVALID_RETENTION_GUARD");
@@ -87,6 +87,8 @@ export async function disconnectStore(ctx, actor, { abandoned } = {}) {
     id: "no-store:" + actor.sub,
   };
   if (abandoned && s.id !== abandoned.storeId)
+    return { ok: true, state: "retained" };
+  if (expiredMetadata && s.id !== expiredMetadata.storeId)
     return { ok: true, state: "retained" };
   // All credentials and bodies are local deletions; never call Google DELETE.
   const statements = [
@@ -142,10 +144,19 @@ export async function disconnectStore(ctx, actor, { abandoned } = {}) {
     ).bind(abandoned.storeId, actor.sub, abandoned.before));
     statements.push(ctx.db.prepare("DELETE FROM mutation_guards"));
   }
+  if (expiredMetadata) {
+    // Compare the observed generation and actual API acquisition time, not a
+    // generic updated_at. A concurrent reconnect/refresh must survive cleanup.
+    statements.unshift(ctx.db.prepare(
+      "INSERT INTO mutation_guards SELECT EXISTS(SELECT 1 FROM stores WHERE id=? AND owner_sub=? AND generation=? AND metadata_fetched_at IS ? AND (metadata_fetched_at IS NULL OR metadata_fetched_at<=?))",
+    ).bind(expiredMetadata.storeId, actor.sub, expiredMetadata.generation,
+      expiredMetadata.fetchedAt, expiredMetadata.before));
+    statements.push(ctx.db.prepare("DELETE FROM mutation_guards"));
+  }
   try {
     await ctx.db.batch(statements);
   } catch (error) {
-    if (abandoned && /CHECK constraint failed: ok\s*=\s*1/.test(error.message))
+    if ((abandoned || expiredMetadata) && /CHECK constraint failed: ok\s*=\s*1/.test(error.message))
       return { ok: true, state: "retained" };
     throw error;
   }

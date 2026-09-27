@@ -25,6 +25,7 @@ test("activation confirms rights and terms, pause blocks future work, disconnect
       return Response.json(
         String(u).includes("/token")
           ? { access_token: "fixture" }
+          : String(u).includes('mybusinessaccountmanagement') ? {name:'accounts/1'}
           : { name: "locations/2", title: "店" },
       );
     },

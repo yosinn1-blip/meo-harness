@@ -210,6 +210,8 @@ test("an expired reconciliation cannot erase a newer posting lease with its stal
 });
 test("obsolete unknown replies cannot starve a current recoverable reply in scheduled reconciliation", async (t) => {
   const { ctx } = await setup(t);
+  const notifyHour=Math.floor(ctx.now()/7200000)*7200000+3600000;
+  ctx.now=()=>notifyHour;
   await ctx.db.prepare("UPDATE replies SET state='post_unknown'").run();
   await ctx.db
     .prepare("UPDATE review_jobs SET stage='post_unknown',next_attempt_at=0")

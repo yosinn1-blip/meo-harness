@@ -1,10 +1,27 @@
 import { SelfError, ensure } from "./errors.mjs";
 import { readSelfConfig } from "./config.mjs";
 import { dateKeys } from "./contracts.mjs";
+import { hmac } from "./crypto.mjs";
 // Registration IDs change on disconnect; the actual GBP location does not.
-export function draftBudgetScope(store) {
+export async function draftBudgetScope(ctx, store, period = dateKeys(ctx.now()).month) {
   ensure(/^locations\/\d+$/.test(store?.locationId ?? ""), "INVALID_LOCATION");
-  return "location:" + store.locationId;
+  ensure(/^\d{4}-\d{2}$/.test(period) && ctx.env.SELF_RATE_KEY, "INVALID_BUDGET_SCOPE");
+  return 'draft-v2:' + await hmac('draft-budget:'+period+':'+store.locationId,ctx.env.SELF_RATE_KEY);
+}
+// Upgrade old raw-location ledgers without buying a fresh monthly allowance.
+// This is a pseudonymous operational record, not anonymous Google content.
+export async function migrateDraftBudget(ctx, {locationId,period} = {}) {
+  const old=locationId
+    ? await ctx.db.prepare("SELECT * FROM usage_budgets WHERE scope=? AND period=? AND kind='draft'").bind('location:'+locationId,period).first()
+    : await ctx.db.prepare("SELECT * FROM usage_budgets WHERE scope LIKE 'location:locations/%' AND kind='draft' ORDER BY period,scope LIMIT 1").first();
+  if(!old)return;
+  const scope=await draftBudgetScope(ctx,{locationId:old.scope.slice('location:'.length)},old.period);
+  await ctx.db.batch([
+    ctx.db.prepare("INSERT INTO usage_budgets(scope,period,kind,cap,used) SELECT ?,period,kind,cap,used FROM usage_budgets WHERE scope=? AND period=? AND kind='draft' ON CONFLICT(scope,period,kind) DO UPDATE SET used=usage_budgets.used+excluded.used")
+      .bind(scope,old.scope,old.period),
+    ctx.db.prepare("UPDATE usage_reservations SET scope=? WHERE scope=? AND period=? AND kind='draft'").bind(scope,old.scope,old.period),
+    ctx.db.prepare("DELETE FROM usage_budgets WHERE scope=? AND period=? AND kind='draft'").bind(old.scope,old.period),
+  ]);
 }
 export function budgetStatement(ctx, { scope, period, kind, cap }) {
   return ctx.db

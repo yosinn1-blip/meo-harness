@@ -30,6 +30,10 @@ async function setup(t, { drafts = "1", timeout = false, aiText = "ご来店あ�
         const u = new URL(input);
         if (u.hostname === "oauth2.googleapis.com")
           return Response.json({ access_token: "fixture" });
+        if (u.hostname === "mybusinessaccountmanagement.googleapis.com")
+          return Response.json({name:'accounts/1'});
+        if (u.hostname === "mybusinessbusinessinformation.googleapis.com")
+          return Response.json({name:'locations/2',title:'架空店'});
         if (u.hostname === "mybusiness.googleapis.com") {
           calls.pages.push(u.searchParams.get("pageToken"));
           const page = Number(u.searchParams.get("pageToken") ?? 0);

@@ -2,25 +2,34 @@ import { readSelfConfig } from "./config.mjs";
 import { LIMITS, dateKeys } from "./contracts.mjs";
 import { getStore } from "./store-repository.mjs";
 import { storeGuard } from "./lifecycle.mjs";
-import { googleAccessToken } from "./google.mjs";
+import { googleAccessToken, googleJson } from "./google.mjs";
 import { fetchGbpReviewsPage, normalizeGbpReview } from "../../src/gbp.mjs";
 import { sha256, seal, unseal, tokenKey } from "./crypto.mjs";
 import { generateReply, PROVIDERS } from "../../src/reply-engine.mjs";
 import { claimJob } from "./jobs.mjs";
-import { budgetStatement, draftBudgetScope, reserveUsage, settleUsage } from "./budget.mjs";
+import { budgetStatement, draftBudgetScope, migrateDraftBudget, reserveUsage, settleUsage } from "./budget.mjs";
 import { ensure } from "./errors.mjs";
 export async function pollSelfStore(ctx, storeId) {
   if (!readSelfConfig(ctx.env).processingEnabled) return;
   const store = await getStore(ctx, storeId);
   if (store?.state !== "active") return;
   const token = await googleAccessToken(ctx, store.ownerSub);
+  if (store.metadataFetchedAt === null || store.metadataFetchedAt <= ctx.now() - 7 * 86400000) {
+    const headers={Authorization:'Bearer '+token};
+    const account=await googleJson(ctx,`https://mybusinessaccountmanagement.googleapis.com/v1/${store.accountId}`,{headers});
+    const location=await googleJson(ctx,`https://mybusinessbusinessinformation.googleapis.com/v1/${store.locationId}?readMask=name,title`,{headers});
+    ensure(account.name===store.accountId && location.name===store.locationId && typeof location.title==='string','LOCATION_NOT_ACCESSIBLE',403);
+    await ctx.db.prepare("UPDATE stores SET title=?,metadata_fetched_at=? WHERE id=? AND generation=? AND state='active'")
+      .bind(location.title.slice(0,300),ctx.now(),storeId,store.generation).run();
+  }
   let cursor = await ctx.db
     .prepare("SELECT * FROM poll_cursors WHERE store_id=?")
     .bind(storeId)
     .first();
   let pageToken = cursor?.page_token ?? null;
-  const cutoff =
-    cursor?.cutoff_at ?? ctx.now() - LIMITS.firstPollDays * 86400000;
+  const cutoff = Math.max(
+    cursor?.cutoff_at ?? 0, ctx.now() - LIMITS.firstPollDays * 86400000,
+  );
   for (let page = 0; page < LIMITS.googlePagesPerRun; page++) {
     let result;
     try {
@@ -58,7 +67,7 @@ export async function pollSelfStore(ctx, storeId) {
       statements.push(
         ctx.db
           .prepare(
-            "INSERT INTO review_jobs(id,store_id,review_id,review_version,generation,stage,payload_ciphertext,next_attempt_at,created_at,updated_at) VALUES (?,?,?,?,?,'fetched',?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload_ciphertext=excluded.payload_ciphertext,created_at=excluded.created_at,updated_at=excluded.updated_at WHERE review_jobs.stage='fetched' AND review_jobs.payload_ciphertext IS NULL",
+            "INSERT INTO review_jobs(id,store_id,review_id,review_version,generation,stage,payload_ciphertext,next_attempt_at,created_at,updated_at) VALUES (?,?,?,?,?,'fetched',?,?,?,?) ON CONFLICT(id) DO UPDATE SET review_id=excluded.review_id,review_version=excluded.review_version,payload_ciphertext=excluded.payload_ciphertext,created_at=excluded.created_at,updated_at=excluded.updated_at WHERE review_jobs.stage='fetched' AND review_jobs.payload_ciphertext IS NULL",
           )
           .bind(
             id,
@@ -76,7 +85,7 @@ export async function pollSelfStore(ctx, storeId) {
     statements.push(
       ctx.db
         .prepare(
-          "INSERT INTO poll_cursors(store_id,page_token,scan_started_at,latest_completed_at,cutoff_at) VALUES (?,?,?,?,?) ON CONFLICT(store_id) DO UPDATE SET page_token=excluded.page_token,latest_completed_at=COALESCE(excluded.latest_completed_at,latest_completed_at)",
+      "INSERT INTO poll_cursors(store_id,page_token,scan_started_at,latest_completed_at,cutoff_at) VALUES (?,?,?,?,?) ON CONFLICT(store_id) DO UPDATE SET page_token=excluded.page_token,scan_started_at=excluded.scan_started_at,latest_completed_at=COALESCE(excluded.latest_completed_at,latest_completed_at)",
         )
         .bind(
           storeId,
@@ -122,14 +131,15 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
     .run();
   const candidates = await ctx.db
     .prepare(
-      "SELECT j.* FROM review_jobs j JOIN stores s ON s.id=j.store_id WHERE j.stage='fetched' AND j.generation=s.generation AND s.state='active' AND j.next_attempt_at<=? AND j.payload_ciphertext IS NOT NULL ORDER BY j.created_at,j.id LIMIT ?",
+      "SELECT j.* FROM review_jobs j JOIN stores s ON s.id=j.store_id WHERE j.stage='fetched' AND j.generation=s.generation AND s.state='active' AND j.next_attempt_at<=? AND j.payload_ciphertext IS NOT NULL ORDER BY j.next_attempt_at,j.created_at,j.id LIMIT ?",
     )
     .bind(ctx.now(), Math.min(limit, LIMITS.batchReviews))
     .all();
   for (const candidate of candidates.results) {
     const store = await getStore(ctx, candidate.store_id);
     const period = dateKeys(ctx.now()).month;
-    const scope = draftBudgetScope(store);
+    await migrateDraftBudget(ctx,{locationId:store.locationId,period});
+    const scope = await draftBudgetScope(ctx, store, period);
     await budgetStatement(ctx, {
       scope,
       period,
@@ -142,7 +152,14 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
       )
       .bind(scope, period)
       .first();
-    if (budget.used >= budget.cap) continue;
+    if (budget.used >= budget.cap) {
+      // Monthly exhaustion must not occupy every later cron's oldest slot.
+      const [year, month] = period.split('-').map(Number);
+      const nextMonth = Date.UTC(year, month, 1) - 9 * 3600000;
+      await ctx.db.prepare("UPDATE review_jobs SET next_attempt_at=? WHERE id=? AND stage='fetched'")
+        .bind(nextMonth, candidate.id).run();
+      continue;
+    }
     const job = await claimJob(ctx, { id: candidate.id, stage: "fetched" });
     if (!job) continue;
     const reservation = "draft:" + job.id + ":" + job.attempts;
@@ -156,9 +173,9 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
     if (!reserved.ok) {
       await ctx.db
         .prepare(
-          "UPDATE review_jobs SET stage='fetched',lease_id=NULL,lease_until=NULL WHERE id=? AND lease_id=?",
+          "UPDATE review_jobs SET stage='fetched',lease_id=NULL,lease_until=NULL,next_attempt_at=? WHERE id=? AND lease_id=?",
         )
-        .bind(job.id, job.lease_id)
+        .bind(ctx.now() + 60000, job.id, job.lease_id)
         .run();
       continue;
     }

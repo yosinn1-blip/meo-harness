@@ -30,6 +30,11 @@ test.afterEach(async ({ context }) => {
   }
 });
 async function fixture(page, path, body = {}) {
+  if(path==='cron' && !body.phase){
+    const poll=await fixture(page,path,{...body,phase:'poll'});
+    expect(poll.ok(),await poll.text()).toBe(true);
+    return fixture(page,path,{...body,phase:'notify'});
+  }
   return page.request.post(app.baseURL + "/fixture/" + path, {
     data: body,
     headers: { "X-Fixture-Key": app.fixtureKey },
