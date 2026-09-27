@@ -4,7 +4,7 @@ import { readSelfConfig } from "./config.mjs";
 import { authorizeLineActor } from "./line-link.mjs";
 import { googleAccessToken } from "./google.mjs";
 import { getGbpReview, postGbpReply } from "../../src/gbp.mjs";
-import { unseal, tokenKey, sha256 } from "./crypto.mjs";
+import { seal, unseal, tokenKey, sha256 } from "./crypto.mjs";
 import { storeGuard } from "./lifecycle.mjs";
 export function classifyCurrentReview({
   current,
@@ -34,6 +34,15 @@ async function replyData(ctx, id) {
   const s = await getStore(ctx, r.store_id);
   ensure(s, "NOT_FOUND", 404);
   return { r, j, s };
+}
+const EDIT_WINDOW_MS = 10 * 60000;
+const CANCEL_WORDS = new Set(["やめる", "やめます", "キャンセル", "中止"]);
+async function draftRev(ctx, id) {
+  const row = await ctx.db
+    .prepare("SELECT rev FROM reply_revisions WHERE reply_id=?")
+    .bind(id)
+    .first();
+  return row?.rev ?? 1;
 }
 async function texts(ctx, r, j) {
   ensure(
@@ -154,11 +163,12 @@ export async function reconcileReply(ctx, id) {
 export async function handleSelfPostback(ctx, event) {
   try {
     ensure(readSelfConfig(ctx.env).processingEnabled, "PROCESSING_CLOSED", 503);
-    const match = /^(approve|skip):(ss_[\w-]+)$/.exec(
+    const match = /^(approve|skip|edit):(ss_[\w-]+)(?::r(\d{1,4}))?$/.exec(
       event.postback?.data ?? "",
     );
     ensure(match, "INVALID_ACTION");
     const [, action, id] = match;
+    const cardRev = Number(match[3] ?? 1);
     const { r, j, s } = await replyData(ctx, id);
     ensure(s.state === "active", "STORE_INACTIVE", 409);
     ensure(
@@ -186,6 +196,16 @@ export async function handleSelfPostback(ctx, event) {
       .bind(event.webhookEventId, ctx.now())
       .run();
     if (!receipt.meta.changes) return { ok: false, code: "DUPLICATE_EVENT" };
+    if (action === "edit") {
+      if (r.state !== "pending") return { ok: false, code: "ALREADY_HANDLED" };
+      await ctx.db
+        .prepare(
+          "INSERT INTO line_edits VALUES (?,?,?) ON CONFLICT(line_user_id) DO UPDATE SET reply_id=excluded.reply_id,expires_at=excluded.expires_at",
+        )
+        .bind(event.source.userId, id, ctx.now() + EDIT_WINDOW_MS)
+        .run();
+      return { ok: true, code: "EDIT_WAITING" };
+    }
     if (["posting", "post_unknown"].includes(r.state))
       return reconcileReply(ctx, id);
     if (r.state !== "pending") return { ok: false, code: "ALREADY_HANDLED" };
@@ -203,6 +223,9 @@ export async function handleSelfPostback(ctx, event) {
           .run();
       return { ok: Boolean(result.meta.changes), code: "SKIPPED" };
     }
+    // A card from before a rewrite must not post the rewritten text.
+    const rev = await draftRev(ctx, id);
+    if (cardRev !== rev) return { ok: false, code: "DRAFT_CHANGED" };
     const { draft, review } = await texts(ctx, r, j);
     const args = {
       accessToken: await googleAccessToken(ctx, s.ownerSub),
@@ -226,9 +249,9 @@ export async function handleSelfPostback(ctx, event) {
         storeGuard(ctx, s, ["active"]),
         ctx.db
           .prepare(
-            "INSERT INTO mutation_guards SELECT EXISTS(SELECT 1 FROM replies WHERE id=? AND state='pending')",
+            "INSERT INTO mutation_guards SELECT EXISTS(SELECT 1 FROM replies WHERE id=? AND state='pending') AND COALESCE((SELECT rev FROM reply_revisions WHERE reply_id=?),1)=?",
           )
-          .bind(id),
+          .bind(id, id, rev),
         ctx.db
           .prepare("UPDATE replies SET state='posting' WHERE id=?")
           .bind(id),
@@ -271,6 +294,96 @@ export async function handleSelfPostback(ctx, event) {
     return {
       ok: false,
       code: e instanceof SelfError ? e.code : "POST_CHECK_FAILED",
+    };
+  }
+}
+
+// Free text after "書き直す" becomes the new draft. Returns null when the
+// message is ordinary chat (no live edit session for this LINE user).
+export async function handleSelfEditText(ctx, event) {
+  if (!readSelfConfig(ctx.env).processingEnabled) return null;
+  if (
+    event?.type !== "message" ||
+    event.message?.type !== "text" ||
+    event.source?.type !== "user" ||
+    !event.source.userId
+  )
+    return null;
+  const userId = event.source.userId;
+  const session = await ctx.db
+    .prepare("SELECT * FROM line_edits WHERE line_user_id=? AND expires_at>?")
+    .bind(userId, ctx.now())
+    .first();
+  if (!session) return null;
+  const id = session.reply_id;
+  const endSession = () =>
+    ctx.db.prepare("DELETE FROM line_edits WHERE line_user_id=?").bind(userId).run();
+  try {
+    ensure(
+      typeof event.webhookEventId === "string" && event.webhookEventId.length < 200,
+      "INVALID_EVENT",
+    );
+    const { r, j, s } = await replyData(ctx, id);
+    if (!authorizeLineActor({ source: event.source, registeredUserId: s.lineUserId, active: true })) {
+      await endSession();
+      return null;
+    }
+    const receipt = await ctx.db
+      .prepare("INSERT INTO line_events VALUES (?,?) ON CONFLICT DO NOTHING")
+      .bind(event.webhookEventId, ctx.now())
+      .run();
+    if (!receipt.meta.changes) return { ok: false, code: "DUPLICATE_EVENT", replyId: id };
+    const body = String(event.message.text ?? "").trim();
+    if (CANCEL_WORDS.has(body)) {
+      await endSession();
+      return { ok: true, code: "EDIT_CANCELLED", replyId: id };
+    }
+    if (!body || body.length > 1200)
+      return { ok: false, code: "EDIT_INVALID", replyId: id };
+    if (s.state !== "active" || r.generation !== s.generation) {
+      await endSession();
+      return { ok: false, code: "STORE_INACTIVE", replyId: id };
+    }
+    if (r.state !== "pending") {
+      await endSession();
+      return { ok: false, code: "ALREADY_HANDLED", replyId: id };
+    }
+    const { review } = await texts(ctx, r, j);
+    const rev = await draftRev(ctx, id);
+    try {
+      await ctx.db.batch([
+        storeGuard(ctx, s, ["active"]),
+        ctx.db
+          .prepare(
+            "INSERT INTO mutation_guards SELECT EXISTS(SELECT 1 FROM replies WHERE id=? AND state='pending' AND expires_at>?) AND COALESCE((SELECT rev FROM reply_revisions WHERE reply_id=?),1)=?",
+          )
+          .bind(id, ctx.now(), id, rev),
+        ctx.db
+          .prepare("UPDATE replies SET draft_ciphertext=?,draft_hash=? WHERE id=?")
+          .bind(await seal(body, tokenKey(ctx), "reply:" + id), await sha256(body), id),
+        ctx.db
+          .prepare(
+            "INSERT INTO reply_revisions VALUES (?,?) ON CONFLICT(reply_id) DO UPDATE SET rev=excluded.rev",
+          )
+          .bind(id, rev + 1),
+        ctx.db.prepare("DELETE FROM line_edits WHERE line_user_id=?").bind(userId),
+        ctx.db.prepare("DELETE FROM mutation_guards"),
+      ]);
+    } catch {
+      await endSession();
+      return { ok: false, code: "ALREADY_HANDLED", replyId: id };
+    }
+    return {
+      ok: true,
+      code: "DRAFT_EDITED",
+      replyId: id,
+      preview: { review, draft: body, rev: rev + 1 },
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      code: e instanceof SelfError ? e.code : "EDIT_FAILED",
+      replyId: id,
     };
   }
 }

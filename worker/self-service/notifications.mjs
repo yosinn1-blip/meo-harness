@@ -48,6 +48,7 @@ export async function sendSelfDigest(ctx, storeId) {
         ...review,
         name: (review.name ?? "匿名").slice(0, 80),
         replyId: row.id,
+        editable: true,
         draft: await unseal(
           row.draft_ciphertext,
           tokenKey(ctx),

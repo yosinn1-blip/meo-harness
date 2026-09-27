@@ -26,6 +26,10 @@ export async function purgeExpired(ctx) {
         "DELETE FROM line_events WHERE event_id IN (SELECT event_id FROM line_events WHERE created_at<? LIMIT 100)",
       )
       .bind(n - 30 * 86400000),
+    ctx.db.prepare("DELETE FROM line_edits WHERE expires_at<=?").bind(n),
+    ctx.db.prepare(
+      "DELETE FROM reply_revisions WHERE reply_id IN (SELECT v.reply_id FROM reply_revisions v LEFT JOIN replies r ON r.id=v.reply_id WHERE r.id IS NULL OR r.draft_ciphertext IS NULL LIMIT 100)",
+    ),
     ...[
       "oauth_attempts",
       "sessions",

@@ -1,7 +1,7 @@
 // LINE Flex Message ビルダー — クチコミ返信承認フロー
 //
 // 各レビューを bubble にして carousel でまとめる。
-// replyId あり: [承認して送信] + [スキップ] の2ボタン（GBP 連携済み店舗）
+// replyId あり: [承認して送信] + [スキップ]（editable なら間に [書き直す]）
 // replyId なし: [確認済み] の1ボタン（非 GBP 店舗、ダイジェスト確認用）
 
 function stars(n) {
@@ -14,7 +14,7 @@ function truncate(s, n) {
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
 
-export function buildReviewBubble({ replyId, review, bizName }) {
+export function buildReviewBubble({ replyId, review, bizName, rev = 1, editable = false }) {
   const starLine = `${stars(review.star)}  ${review.name ?? '匿名'}`;
   // 承認する前に全文を読めるよう、口コミも返信案も実質切らない（Flex の容量上限への保険だけ残す）
   const reviewText = truncate(review.text, 1000);
@@ -28,8 +28,14 @@ export function buildReviewBubble({ replyId, review, bizName }) {
           type: 'button',
           style: 'primary',
           height: 'sm',
-          action: { type: 'postback', label: '承認して送信', data: `approve:${replyId}` },
+          action: { type: 'postback', label: '承認して送信', data: rev > 1 ? `approve:${replyId}:r${rev}` : `approve:${replyId}` },
         },
+        ...(editable ? [{
+          type: 'button',
+          style: 'secondary',
+          height: 'sm',
+          action: { type: 'postback', label: '書き直す', data: `edit:${replyId}` },
+        }] : []),
         {
           type: 'button',
           style: 'secondary',
@@ -130,7 +136,7 @@ export function buildFlexPayload({ to, reviews, bizName }) {
   let size = 0;
   let placed = 0;
   for (const r of reviews) {
-    const bubble = buildReviewBubble({ replyId: r.replyId, review: r, bizName });
+    const bubble = buildReviewBubble({ replyId: r.replyId, review: r, bizName, rev: r.rev, editable: r.editable });
     const b = byteLength(bubble);
     let current = carousels[carousels.length - 1];
     if (current.length >= MAX_BUBBLES || (current.length && size + b > MAX_CAROUSEL_BYTES)) {

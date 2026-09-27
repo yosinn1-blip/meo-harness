@@ -420,7 +420,7 @@ async function processLineEvents(events, env) {
   const { parseLinkCode } = await import('../src/line-link.mjs');
   for (const event of events) {
     try {
-      if (env.SELF_DB && event.type === 'postback' && /^(approve|skip):ss_/.test(event.postback?.data ?? '')) {
+      if (env.SELF_DB && event.type === 'postback' && /^(approve|skip|edit):ss_/.test(event.postback?.data ?? '')) {
         const {handleSelfPostback}=await import('./self-service/approvals.mjs');
         const selfCtx=createSelfContext(env);
         const result=await handleSelfPostback(selfCtx,event);
@@ -430,6 +430,16 @@ async function processLineEvents(events, env) {
       if (env.SELF_DB && event.type === 'message' && /^MEOS-/.test(event.message?.text?.trim().toUpperCase() ?? '')) {
         const {consumeLineCode}=await import('./self-service/line-link.mjs');
         await consumeLineCode(createSelfContext(env),event);continue;
+      }
+      // Text sent after 「書き直す」 becomes the new draft; other chat falls through.
+      if (env.SELF_DB && event.type === 'message' && event.message?.type === 'text') {
+        const {handleSelfEditText}=await import('./self-service/approvals.mjs');
+        const selfCtx=createSelfContext(env);
+        const result=await handleSelfEditText(selfCtx,event);
+        if (result) {
+          const {sendSelfFeedback}=await import("./self-service/feedback.mjs");
+          await sendSelfFeedback(selfCtx,event,result);continue;
+        }
       }
       if (event.type === 'postback') await handleLinePostback(event, env);
       if (event.type === 'message' && event.message?.type === 'text') {

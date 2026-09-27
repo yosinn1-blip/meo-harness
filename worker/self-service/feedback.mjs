@@ -4,6 +4,7 @@ import { sha256 } from "./crypto.mjs";
 import { consumeRate } from "./abuse.mjs";
 import { dateKeys } from "./contracts.mjs";
 import { budgetStatement, reserveUsage, settleUsage } from "./budget.mjs";
+import { buildReviewBubble } from "../../src/line-flex.mjs";
 const messages = {
   POSTED: "Googleへの投稿を確認しました。",
   SKIPPED: "この返信案をスキップしました。Googleには投稿していません。",
@@ -24,13 +25,25 @@ const messages = {
   REPLY_STALE: "停止・再接続前の古い通知です。このボタンからは投稿しません。",
   STORE_INACTIVE: "現在は停止中または再接続が必要なため投稿していません。",
   PROCESSING_CLOSED: "処理を一時停止しているため投稿していません。",
+  EDIT_WAITING:
+    "書き直した返信文を、このトークにそのまま送ってください（10分以内・1200字まで）。やめる場合は「やめる」と送ってください。",
+  EDIT_CANCELLED:
+    "書き直しをやめました。元の返信案のカードから承認・スキップできます。",
+  EDIT_INVALID:
+    "返信文が空か、1200字を超えています。もう一度送ってください。やめる場合は「やめる」と送ってください。",
+  DRAFT_CHANGED:
+    "この返信案は書き直されています。最新の確認カードから「承認して送信」を押してください。",
+  DRAFT_EDITED: "この内容でGoogleに返信しますか？ よければ「承認して送信」を押してください。",
 };
+// Conversational steps: the account URL would only add noise.
+const noAccountLink = new Set(["EDIT_WAITING", "EDIT_CANCELLED", "EDIT_INVALID", "DRAFT_EDITED"]);
 export async function sendSelfFeedback(ctx, event, result) {
   if (readSelfConfig(ctx.env).pilotMode) return;
   const message = messages[result?.code];
-  const id = /^(approve|skip):(ss_[\w-]+)$/.exec(
-    event.postback?.data ?? "",
-  )?.[2];
+  const id =
+    /^(approve|skip|edit):(ss_[\w-]+)(?::r\d{1,4})?$/.exec(
+      event.postback?.data ?? "",
+    )?.[2] ?? (event.type === "message" ? result?.replyId : undefined);
   if (
     !message ||
     !id ||
@@ -43,7 +56,7 @@ export async function sendSelfFeedback(ctx, event, result) {
   // Recheck owner even for failure codes produced before postback authorization.
   const store = await ctx.db
     .prepare(
-      "SELECT s.line_user_id FROM stores s JOIN replies r ON r.store_id=s.id WHERE r.id=?",
+      "SELECT s.line_user_id,s.title FROM stores s JOIN replies r ON r.store_id=s.id WHERE r.id=?",
     )
     .bind(id)
     .first();
@@ -97,12 +110,7 @@ export async function sendSelfFeedback(ctx, event, result) {
         },
         body: JSON.stringify({
           replyToken: event.replyToken,
-          messages: [
-            {
-              type: "text",
-              text: message + "\n" + ctx.env.SELF_PUBLIC_ORIGIN + "/account",
-            },
-          ],
+          messages: feedbackMessages(ctx, result, id, message, store),
         }),
         signal: AbortSignal.timeout(10000),
       },
@@ -121,4 +129,26 @@ export async function sendSelfFeedback(ctx, event, result) {
       await settleUsage(ctx, key, "uncertain");
     } catch {} /* account remains the fallback; never substitute a paid push */
   }
+}
+
+function feedbackMessages(ctx, result, id, message, store) {
+  const text = noAccountLink.has(result.code)
+    ? message
+    : message + "\n" + ctx.env.SELF_PUBLIC_ORIGIN + "/account";
+  if (result.code !== "DRAFT_EDITED" || !result.preview) return [{ type: "text", text }];
+  const { review, draft, rev } = result.preview;
+  return [
+    { type: "text", text },
+    {
+      type: "flex",
+      altText: "書き直した返信案の確認",
+      contents: buildReviewBubble({
+        replyId: id,
+        review: { ...review, name: (review.name ?? "匿名").slice(0, 80), draft },
+        bizName: String(store?.title ?? "").slice(0, 80),
+        rev,
+        editable: true,
+      }),
+    },
+  ];
 }
