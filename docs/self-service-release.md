@@ -6,6 +6,8 @@
 
 その後、承認済みの[専用DBと未デプロイ版の鍵の準備](self-service-preparation-2026-09-27.md)まで実施しました。本番binding・新コードのデプロイ・一般受付は未実施です。[共有版の案内下書き](self-service-privacy-draft.md)も正式公開前です。
 
+続く[Google・LINE・Groqの読み取り確認](self-service-provider-check-2026-09-27.md)で、自己登録用Google callbackの未登録、共有LINE中継の`MEOS-`非対応、Googleの検証未完了を確認しました。共有ボットでは、中継の対応を確認せずWebhookを本体へ付け替えないでください。
+
 ## 1. ローカルで確認する
 
 ```sh
