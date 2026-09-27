@@ -7,7 +7,7 @@ import { fetchGbpReviewsPage, normalizeGbpReview } from "../../src/gbp.mjs";
 import { sha256, seal, unseal, tokenKey } from "./crypto.mjs";
 import { generateReply, PROVIDERS } from "../../src/reply-engine.mjs";
 import { claimJob } from "./jobs.mjs";
-import { budgetStatement, reserveUsage, settleUsage } from "./budget.mjs";
+import { budgetStatement, draftBudgetScope, reserveUsage, settleUsage } from "./budget.mjs";
 import { ensure } from "./errors.mjs";
 export async function pollSelfStore(ctx, storeId) {
   if (!readSelfConfig(ctx.env).processingEnabled) return;
@@ -129,8 +129,9 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
   for (const candidate of candidates.results) {
     const store = await getStore(ctx, candidate.store_id);
     const period = dateKeys(ctx.now()).month;
+    const scope = draftBudgetScope(store);
     await budgetStatement(ctx, {
-      scope: "store:" + store.id,
+      scope,
       period,
       kind: "draft",
       cap: c.limits.drafts,
@@ -139,7 +140,7 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
       .prepare(
         "SELECT used,cap FROM usage_budgets WHERE scope=? AND period=? AND kind='draft'",
       )
-      .bind("store:" + store.id, period)
+      .bind(scope, period)
       .first();
     if (budget.used >= budget.cap) continue;
     const job = await claimJob(ctx, { id: candidate.id, stage: "fetched" });
@@ -147,7 +148,7 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
     const reservation = "draft:" + job.id + ":" + job.attempts;
     const reserved = await reserveUsage(ctx, {
       id: reservation,
-      scope: "store:" + store.id,
+      scope,
       period,
       kind: "draft",
       units: 1,

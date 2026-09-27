@@ -1,6 +1,11 @@
 import { SelfError, ensure } from "./errors.mjs";
 import { readSelfConfig } from "./config.mjs";
 import { dateKeys } from "./contracts.mjs";
+// Registration IDs change on disconnect; the actual GBP location does not.
+export function draftBudgetScope(store) {
+  ensure(/^locations\/\d+$/.test(store?.locationId ?? ""), "INVALID_LOCATION");
+  return "location:" + store.locationId;
+}
 export function budgetStatement(ctx, { scope, period, kind, cap }) {
   return ctx.db
     .prepare(
