@@ -44,6 +44,8 @@ SELF_MONTHLY_PUSH_LIMIT = "0"
 SELF_LEGACY_PUSH_RESERVE = "180"
 SELF_LINE_FRIEND_URL = "https://line.me/R/ti/p/@477byprh"
 SELF_TERMS_VERSION = "2026-09-27"
+# Google Search Console所有権確認（公開ファイル名。消すとブランド検証が外れる）
+SELF_GOOGLE_SITE_VERIFICATION_FILE = "google3031925227c81399.html"
 
 # ── Cron Trigger: タイムゾーン対応ダイジェスト（毎時実行・各店舗の現地9:00に送信）──
 # utcOffset=+9(JST/KST)→UTC 0:00, utcOffset=+1(BST)→UTC 8:00, utcOffset=-5(EST)→UTC 14:00
