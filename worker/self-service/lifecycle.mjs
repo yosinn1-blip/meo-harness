@@ -79,13 +79,17 @@ export async function pauseStore(ctx, actor) {
     .run();
   return { ok: true };
 }
-export async function disconnectStore(ctx, actor) {
+export async function disconnectStore(ctx, actor, { abandoned } = {}) {
   ensure(actor.sub, "LOGIN_REQUIRED", 401);
+  if (abandoned)
+    ensure(Number.isFinite(abandoned.before) && abandoned.storeId, "INVALID_RETENTION_GUARD");
   const s = (await findOwnedStore(ctx, actor.sub)) ?? {
     id: "no-store:" + actor.sub,
   };
+  if (abandoned && s.id !== abandoned.storeId)
+    return { ok: true, state: "retained" };
   // All credentials and bodies are local deletions; never call Google DELETE.
-  await ctx.db.batch([
+  const statements = [
     ctx.db
       .prepare(
         "UPDATE stores SET state='disconnected',generation=generation+1 WHERE id=?",
@@ -129,6 +133,21 @@ export async function disconnectStore(ctx, actor) {
     ctx.db.prepare("DELETE FROM location_claims WHERE store_id=?").bind(s.id),
     ctx.db.prepare("DELETE FROM stores WHERE id=?").bind(s.id),
     ctx.db.prepare("DELETE FROM users WHERE sub=?").bind(actor.sub),
-  ]);
+  ];
+  if (abandoned) {
+    // The cron's initial SELECT is only a candidate list. A concurrent activation
+    // or reconnect must win over cleanup, including between the read and batch.
+    statements.unshift(ctx.db.prepare(
+      "INSERT INTO mutation_guards SELECT EXISTS(SELECT 1 FROM stores WHERE id=? AND owner_sub=? AND terms_version IS NULL AND updated_at<?)",
+    ).bind(abandoned.storeId, actor.sub, abandoned.before));
+    statements.push(ctx.db.prepare("DELETE FROM mutation_guards"));
+  }
+  try {
+    await ctx.db.batch(statements);
+  } catch (error) {
+    if (abandoned && /CHECK constraint failed: ok\s*=\s*1/.test(error.message))
+      return { ok: true, state: "retained" };
+    throw error;
+  }
   return { ok: true, state: "disconnected" };
 }

@@ -5,9 +5,91 @@ import {createSelfContext} from '../../worker/self-service/config.mjs';
 import {purgeExpired} from '../../worker/self-service/retention.mjs';
 import {createSession} from '../../worker/self-service/session.mjs';
 import {seedGoogleCredential} from '../support/self-google.mjs';
+import {googleAccessToken} from '../../worker/self-service/google.mjs';
+import {issueLineCode} from '../../worker/self-service/line-link.mjs';
+import {activateStore} from '../../worker/self-service/lifecycle.mjs';
 
 const now = Date.parse('2026-09-27T01:00:00Z');
 const day = 86400000;
+for (const initialState of ['line_verified', 'active']) {
+  test(`expired Google credentials respect onboarding retention for ${initialState}`, async t => {
+    const {db}=await withD1(t);await applySchema(db);
+    let clock=now;
+    const ctx=createSelfContext(fixtureEnv(db),{
+      now:()=>clock,
+      fetchImpl:async (url, init)=>{
+        assert.equal(url,'https://oauth2.googleapis.com/token');
+        assert.equal(init.method,'POST');
+        return Response.json({error:'invalid_grant'},{status:400});
+      },
+    });
+    const store=await seedStore(ctx,{state:initialState});
+    await seedGoogleCredential(ctx);
+    await assert.rejects(googleAccessToken(ctx,'alice'),{code:'GOOGLE_RECONNECT_REQUIRED'});
+    assert.equal((await db.prepare('SELECT state FROM stores WHERE id=?').bind(store.id).first()).state,'needs_google_reconnect');
+    clock+=day-1;
+    await purgeExpired(ctx);
+    assert.ok(await db.prepare("SELECT owner_sub FROM google_credentials WHERE owner_sub='alice'").first());
+    clock+=2;
+    await purgeExpired(ctx);
+    const retained=initialState==='active';
+    for(const [table,column,value] of [['stores','id',store.id],['google_credentials','owner_sub','alice'],['location_claims','store_id',store.id]]) {
+      assert.equal(Boolean(await db.prepare(`SELECT 1 FROM ${table} WHERE ${column}=?`).bind(value).first()),retained,`${table}: only previously activated stores may retain a reconnecting account`);
+    }
+  });
+}
+test('never-activated reconnect can be paused without escaping the 24-hour cleanup', async t => {
+  const {db}=await withD1(t);await applySchema(db);
+  let clock=now;
+  const ctx=createSelfContext(fixtureEnv(db),{now:()=>clock});
+  const store=await seedStore(ctx,{state:'line_verified'});
+  await seedGoogleCredential(ctx);
+  // A successful reconnect after LINE verification returns to paused without
+  // setting terms_version; only activateStore records acceptance.
+  await db.prepare("UPDATE stores SET state='paused' WHERE id=?").bind(store.id).run();
+  clock+=day+1;
+  await purgeExpired(ctx);
+  assert.equal(await db.prepare('SELECT id FROM stores WHERE id=?').bind(store.id).first(),null);
+  assert.equal(await db.prepare("SELECT owner_sub FROM google_credentials WHERE owner_sub='alice'").first(),null);
+});
+test('LINE relinking cannot make an activated store eligible for abandoned-signup deletion', async t => {
+  const {db}=await withD1(t);await applySchema(db);
+  let clock=now;
+  const ctx=createSelfContext(fixtureEnv(db),{now:()=>clock});
+  const store=await seedStore(ctx);
+  await seedGoogleCredential(ctx);
+  await issueLineCode(ctx,{sub:'alice',sessionHash:'fixture-session'});
+  clock+=2*day;
+  await purgeExpired(ctx);
+  const row=await db.prepare('SELECT state,terms_version FROM stores WHERE id=?').bind(store.id).first();
+  assert.deepEqual(row,{state:'line_pending',terms_version:'fixture-v1'});
+  assert.ok(await db.prepare("SELECT owner_sub FROM google_credentials WHERE owner_sub='alice'").first());
+});
+for (const change of ['activate','refresh']) {
+  test(`retention rechecks abandonment atomically when ${change} wins the cleanup race`, async t => {
+    const {db}=await withD1(t);await applySchema(db);
+    let clock=now;
+    const ctx=createSelfContext(fixtureEnv(db),{now:()=>clock,fetchImpl:async u=>
+      Response.json(String(u).includes('/token')?{access_token:'fixture'}:{name:'locations/2',title:'架空店'})});
+    const store=await seedStore(ctx,{state:'line_verified'});
+    await seedGoogleCredential(ctx);
+    clock+=2*day;
+    let raced=false;
+    const raceDb={prepare:sql=>db.prepare(sql),batch:async statements=>{
+      if(!raced){
+        raced=true;
+        if(change==='activate') await activateStore(ctx,{sub:'alice'},{confirmed:true,termsVersion:'fixture-v1'});
+        else await issueLineCode(ctx,{sub:'alice',sessionHash:'fixture-session'});
+      }
+      return db.batch(statements);
+    }};
+    await purgeExpired({...ctx,db:raceDb});
+    assert.equal(raced,true);
+    assert.ok(await db.prepare('SELECT id FROM stores WHERE id=?').bind(store.id).first());
+    assert.ok(await db.prepare("SELECT owner_sub FROM google_credentials WHERE owner_sub='alice'").first());
+    assert.ok(await db.prepare('SELECT store_id FROM location_claims WHERE store_id=?').bind(store.id).first());
+  });
+}
 async function seedUsage(db, {id,period,kind='push',state='committed',created=now-150*day,scope='channel'}) {
   await db.prepare('INSERT OR IGNORE INTO usage_budgets VALUES (?,?,?,1000,0)').bind(scope,period,kind).run();
   await db.prepare('INSERT INTO usage_reservations VALUES (?,?,?,?,1,?,?)').bind(id,scope,period,kind,state,created).run();

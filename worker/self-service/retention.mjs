@@ -7,12 +7,14 @@ export async function purgeExpired(ctx) {
   const usageMonth = dateKeys(usageCutoff).month;
   const expired = await ctx.db
     .prepare(
-      "SELECT s.owner_sub FROM stores s WHERE s.state IN ('location_selected','line_pending','line_verified','ready') AND s.updated_at<? LIMIT 100",
+      "SELECT s.id,s.owner_sub FROM stores s WHERE s.terms_version IS NULL AND s.updated_at<? ORDER BY s.updated_at,s.id LIMIT 100",
     )
     .bind(n - 86400000)
     .all();
   for (const row of expired.results)
-    await disconnectStore(ctx, { sub: row.owner_sub });
+    await disconnectStore(ctx, { sub: row.owner_sub }, {
+      abandoned: { storeId: row.id, before: n - 86400000 },
+    });
   await ctx.db.batch([
     ctx.db
       .prepare(
