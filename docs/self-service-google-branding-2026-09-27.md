@@ -21,6 +21,16 @@ TDDでGETの404とPOSTの404を先に再現（期待は200/405、元終了1）�
 
 ## 本番反映・再確認
 
-この時点では検証済みコードの反映準備まで。実デプロイ、HTTP一致、Search Console確認、Googleブランド再確認の結果を追記する。一般公開gateはfalseのまま。
+2026-09-27 16:36 JST、承認範囲を本番へ反映した。
+
+- 対象commit `55b26d066d87d4630df997856a3b118c5a3b6534`。このcommitを固定して全309件を再実行し、テスト前後のclean状態、各件数/exit/生ログhash、bundle hashをmanifestへ記録。staging/deployも同じcommit/hashを要求する。独立レビューで発見した古い成功ログの混同リスクは、この固定とmanifest照合で解消済み。
+- 本番version `1de869e1-d815-432f-b5e5-784f2c5c53c4`、100%。deployment `b18bf9b6-28eb-4a59-9939-c32e7fdc1eca`。bundle SHA-256 `148d651d74723e5d8d86916ae7e872b911a5981d2da467910f9184406b497fba` がローカル・未配信版・配信版で一致。確認ルートに加え、既存commit `4a4ea72` の保存期限修正3件も反映。
+- 既存binding/secretをすべて継承し、確認ファイル名のplain_text bindingだけ追加。compatibility設定、usage_model、placement、tail、Logpush、cron、workers.dev公開/previews設定の前後一致を確認。課金設定や認証秘密を変更していない。
+- 確認用HTTPは200、Googleから取得したファイル内容と完全一致、redirectなし、Cookieなし。主要7ページも200。
+- 公開statusは受付false・処理false、本人限定pilot、1店舗/下書き0/送信0/既存LINE確保180。匿名のGoogle接続開始は503 `REGISTRATION_CLOSED`。DB集計は店舗0/資格情報1/自己登録返信0/legacy予約1で前後一致。
+- Search ConsoleがHTMLファイルによる「所有権を証明しました」を表示。URLプレフィックスの所有権確認成功であり、親ドメイン全体の所有権取得ではない。
+- Googleブランドの再確認をリクエストし、画面で「ブランディングは検証済み」を確認。未使用Gmail権限除外後のデータアクセス検証も不要。**まだユーザー表示へは未公開**で、Google画面は検証結果の7日後の期限切れを案内している。
+
+最後の「ブランディングを公開」は、検証済みのアプリ名/案内URLをGoogleログイン画面へ反映する別操作として本人へ確認中。一般受付の公開とは区別する。今回のWorker反映・所有権・ブランド検証成功だけで、実LINE確認、自己登録の停止/切断、保存運用、一般公開gateをtrueにはしない。実LINE送信・Google実投稿・既存店移行は行っていない。
 
 証跡はignored `output/self-service/branding/`、Google画面は `output/self-service/launch-audit/`。秘密・実確認値は本書や生ログに転記しない。
