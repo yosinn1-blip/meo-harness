@@ -158,7 +158,7 @@ test('top page explains the service without auth or DB and leads to registration
   assert.equal(response.headers.get('Set-Cookie'), null);
   assert.match(response.headers.get('Content-Security-Policy'), /script-src 'none'/);
   const html = await response.text();
-  for (const text of ['「送信」', '編集する', '申し込み不要', '先着10店舗', '運営者', 'meo.harness@gmail.com', 'href="/start"', 'href="/self/privacy"', 'href="/self/terms"'])
+  for (const text of ['「送信」', '編集する', '先着10店舗', '月30件', '運営者', 'meo.harness@gmail.com', 'href="/start"', 'href="/self/privacy"', 'href="/self/terms"'])
     assert.ok(html.includes(text), text);
   assert.doesNotMatch(html, /スキップ|承認して送信|<script/);
   const css = await worker.fetch(new Request('https://meo.test/self/assets/home.css'), {}, {});
@@ -176,4 +176,43 @@ test('all public MEO contact pages use the dedicated address rather than the per
     for (const [, recipient] of body.matchAll(/mailto:([^"?]+)/g))
       assert.equal(recipient, 'meo.harness@gmail.com', path);
   }
+});
+
+test('home exposes pricing, support and existing-account entry without setup-time guarantees', async () => {
+  const response = await worker.fetch(new Request('https://meo.test/'), {}, {});
+  const html = await response.text();
+  for (const fragment of ['href="#pricing"', 'id="pricing"', 'id="faq"', 'href="/self/help/faq"', 'href="/self/help/report"'])
+    assert.ok(html.includes(fragment), fragment);
+  const hero = html.match(/<section[^>]*class="hero"[\s\S]*?<\/section>/)?.[0];
+  assert.ok(hero, 'hero section exists');
+  assert.match(hero, /href="\/account"/);
+  assert.doesNotMatch(html, /5分で完了|5分で始められ|待ち時間もありません/);
+});
+
+test('home FAQ uses native disclosures for accounts, manual sending and daily notification timing', async () => {
+  const response = await worker.fetch(new Request('https://meo.test/'), {}, {});
+  const html = await response.text();
+  const faq = html.match(/<section[^>]*id="faq"[^>]*>[\s\S]*?<\/section>/)?.[0];
+  assert.ok(faq, 'FAQ section exists');
+  const disclosures = [...faq.matchAll(/<details(?:\s[^>]*)?>[\s\S]*?<\/details>/g)].map(match => match[0]);
+  assert.equal(disclosures.length, 3);
+  for (const disclosure of disclosures) assert.match(disclosure, /<summary(?:\s[^>]*)?>[\s\S]+?<\/summary>/);
+  assert.match(faq, /Google(?:アカウント|ビジネスプロフィール)/);
+  assert.match(faq, /LINE/);
+  assert.match(faq, /送信/);
+  assert.match(faq, /1日1回/);
+  assert.match(faq, /朝9時以降/);
+});
+
+test('home supplies a keyboard skip destination and labels the illustrative review example', async () => {
+  const response = await worker.fetch(new Request('https://meo.test/'), {}, {});
+  const html = await response.text();
+  assert.match(html, /<a[^>]*href="#main-content"[^>]*>本文へ移動<\/a>/);
+  const main = html.match(/<main\b[^>]*>/)?.[0];
+  assert.match(main ?? '', /id="main-content"/);
+  assert.match(main ?? '', /tabindex="-1"/);
+  const figure = html.match(/<figure\b[^>]*>[\s\S]*?<\/figure>/)?.[0];
+  assert.ok(figure, 'illustrative review belongs to a figure');
+  assert.match(figure, /<figcaption(?:\s[^>]*)?>[\s\S]*画面はイメージです[\s\S]*<\/figcaption>/);
+  assert.match(figure, /架空/);
 });
