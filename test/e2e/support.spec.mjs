@@ -62,7 +62,7 @@ test('report builds a reviewed mail draft, not a network submission; editing inv
   await expect(page.getByText('まだ送信されていません。', { exact: false })).toBeVisible();
   const url = new URL(await page.getByRole('link', { name: 'メールアプリを開く', exact: true }).getAttribute('href'));
   expect(url.protocol).toBe('mailto:');
-  expect(url.pathname).toBe('yosinn1@gmail.com');
+  expect(url.pathname).toBe('meo.harness@gmail.com');
   expect([...url.searchParams.keys()]).toEqual(['subject', 'body']);
   expect(url.searchParams.get('body')).toContain('2026-09-27 10:30');
   expect(url.searchParams.get('body')).not.toMatch(/private-(code|token)-fixture/);
@@ -116,7 +116,7 @@ test('without JavaScript report entry stays disabled and direct mail guidance re
     await page.goto(app.baseURL + '/self/help/report');
     await expect(page.getByRole('button', { name: 'メール内容を確認する', exact: true })).toBeDisabled();
     await expect(page.getByText('入力フォームが利用できない場合は', { exact: false })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'yosinn1@gmail.com', exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'meo.harness@gmail.com', exact: true })).toBeVisible();
   } finally { await context.close(); }
 });
 
@@ -162,4 +162,19 @@ test('copy success never claims receipt and pending copy feedback cannot revive 
   await page.getByRole('button', { name: 'メール内容を確認する', exact: true }).click();
   await page.evaluate(() => window.finishCopy());
   await expect(page.getByRole('status')).toBeEmpty();
+});
+
+test('home and policy contact links show the dedicated mailbox on desktop and mobile', async ({ page }) => {
+  for (const width of [1280, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of ['/', '/self/privacy', '/self/terms']) {
+      await page.goto(app.baseURL + path);
+      const contact = page.getByRole('link', { name: 'meo.harness@gmail.com', exact: true });
+      await expect(contact).toBeVisible();
+      await expect(contact).toHaveAttribute('href', 'mailto:meo.harness@gmail.com');
+      await expect(page.getByText('yosinn1@gmail.com', { exact: true })).toHaveCount(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      if (path === '/') await contact.locator('..').screenshot({ path: `output/self-service/contact-${width}.png` });
+    }
+  }
 });

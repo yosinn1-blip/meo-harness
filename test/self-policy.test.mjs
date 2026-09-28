@@ -10,7 +10,7 @@ test('privacy and terms are readable without login and linked from both onboardi
     assert.match(res.headers.get('Content-Type'),/text\/html/);
     assert.equal(res.headers.get('Cache-Control'),'no-store');
     assert.match(res.headers.get('Content-Security-Policy'),/frame-ancestors 'none'/);
-    const body=await res.text();assert.ok(body.includes(title));assert.match(body,/mailto:yosinn1@gmail.com/);
+    const body=await res.text();assert.ok(body.includes(title));assert.match(body,/mailto:meo.harness@gmail.com/);
     assert.equal((await worker.fetch(new Request('https://meo.test'+path,{method:'POST'}),{},{})).status,405);
   }
   for(const path of ['/start','/account']){

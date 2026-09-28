@@ -158,10 +158,22 @@ test('top page explains the service without auth or DB and leads to registration
   assert.equal(response.headers.get('Set-Cookie'), null);
   assert.match(response.headers.get('Content-Security-Policy'), /script-src 'none'/);
   const html = await response.text();
-  for (const text of ['「送信」', '編集する', '申し込み不要', '先着10店舗', '運営者', 'yosinn1@gmail.com', 'href="/start"', 'href="/self/privacy"', 'href="/self/terms"'])
+  for (const text of ['「送信」', '編集する', '申し込み不要', '先着10店舗', '運営者', 'meo.harness@gmail.com', 'href="/start"', 'href="/self/privacy"', 'href="/self/terms"'])
     assert.ok(html.includes(text), text);
   assert.doesNotMatch(html, /スキップ|承認して送信|<script/);
   const css = await worker.fetch(new Request('https://meo.test/self/assets/home.css'), {}, {});
   assert.equal(css.status, 200);
   assert.equal(css.headers.get('Content-Type'), 'text/css; charset=utf-8');
+});
+
+test('all public MEO contact pages use the dedicated address rather than the personal mailbox', async () => {
+  for (const path of ['/', '/self/help/report', '/self/privacy', '/self/terms', '/self/help/quickstart']) {
+    const response = await worker.fetch(new Request('https://meo.test' + path), {}, {});
+    assert.equal(response.status, 200, path);
+    const body = await response.text();
+    assert.ok(body.includes('meo.harness@gmail.com'), path);
+    assert.ok(!body.includes('yosinn1@gmail.com'), path);
+    for (const [, recipient] of body.matchAll(/mailto:([^"?]+)/g))
+      assert.equal(recipient, 'meo.harness@gmail.com', path);
+  }
 });
