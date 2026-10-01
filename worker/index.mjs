@@ -418,6 +418,9 @@ async function handleLineBotWebhook(request, env, ctx) {
 
 async function processLineEvents(events, env) {
   const { parseLinkCode } = await import('../src/line-link.mjs');
+  // waitUntil's allowance belongs to the request, not each event. Preserve
+  // ordered consumption/actions, then supervise bounded PIN delivery together.
+  const lineCheckSignal = AbortSignal.timeout(20000), lineChecks = [];
   for (const event of events) {
     try {
       if (env.SELF_DB && event.type === 'postback' && /^(approve|skip|edit):ss_/.test(event.postback?.data ?? '')) {
@@ -429,7 +432,7 @@ async function processLineEvents(events, env) {
       }
       if (env.SELF_DB && event.type === 'message' && /^MEOS-/.test(event.message?.text?.trim().toUpperCase() ?? '')) {
         const {consumeLineCode}=await import('./self-service/line-link.mjs');
-        await consumeLineCode(createSelfContext(env),event);continue;
+        await consumeLineCode({...createSelfContext(env),lineCheckSignal},event,{deferCheck:task=>lineChecks.push(task)});continue;
       }
       // Text sent after 「書き直す」 becomes the new draft; other chat falls through.
       if (env.SELF_DB && event.type === 'message' && event.message?.type === 'text') {
@@ -450,6 +453,14 @@ async function processLineEvents(events, env) {
       console.error(`[line-${event.type}] error:`, err.message);
     }
   }
+  let nextCheck=0;
+  await Promise.allSettled(Array.from({length:Math.min(3,lineChecks.length)},async()=>{
+    while(nextCheck<lineChecks.length){
+      const task=lineChecks[nextCheck++];
+      try { await task(); }
+      catch(err) { console.error('[line-check] error:',err.message); }
+    }
+  }));
 }
 
 async function handleLinePostback(event, env) {

@@ -27,7 +27,9 @@
 
 ## 証拠と限界
 
-native workerd + ローカルD1、署名検証、架空Google/LINEを使ったブラウザテストで確認しています。実Google認可、実LINE送信、スマートフォン実機/LINE内ブラウザ切替、印刷コピー後のQR、実利用時間は未確認です。自動経路のquotaとpush通信は各既存タイムアウトに加え合計20秒で中止します。D1障害等で途中終了した場合は90秒の送信リース後に結果不明として手動復帰します。
+native workerd + ローカルD1、署名検証、架空Google/LINEを使ったブラウザテストで確認しています。実Google認可、実LINE送信、スマートフォン実機/LINE内ブラウザ切替、印刷コピー後のQR、実利用時間は未確認です。Webhookではコード受理と既存の後続操作を順に済ませた後、PIN送信を同時最大3件で監督します。quotaとpush通信は各既存タイムアウトに加えリクエスト共通の20秒期限で中止し、期限後の未送信分は記録して手動復帰へ回します。D1障害等で途中終了した場合は90秒の送信リース後に結果不明として手動復帰します。検出と送信記録の間の画面待機も90秒で打ち切り、再送の補助へ進みます。確認番号の自動再送は行いません。
+
+背景処理の30秒は同じリクエストの全`waitUntil`で共有されます。1イベントに20秒ずつ待つ構成を避け、遅いPIN送信が後続イベントの受理を止めないようにしています。[Cloudflare実行期限仕様](https://developers.cloudflare.com/workers/runtime-apis/context/#waituntil)
 
 LINEのAPI受付と実到達は異なります。タイムアウト/5xxは送信済みの可能性があり、同じ試行のUUIDを`X-Line-Retry-Key`へ渡す既存senderを使います。この候補は結果不明の自動再試行を追加しません。[LINE公式の再試行仕様](https://developers.line.biz/en/docs/messaging-api/retrying-api-request/)
 

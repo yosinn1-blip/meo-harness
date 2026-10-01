@@ -6,6 +6,7 @@ let state = null,
   challengeToken = "",
   challengeWidget = null,
   rendered = "",
+  lineIdleSince = null,
   busy = false;
 const messages = {
   LOGIN_REQUIRED:
@@ -165,6 +166,12 @@ async function google(intent) {
 }
 async function refresh(force = false) {
   state = await api("status");
+  if (state.lineAutoPin && state.lineDetected && state.lineCheck?.state === "idle") {
+    lineIdleSince ??= Date.now();
+    state.lineCheck = {...state.lineCheck,
+      state: Date.now()-lineIdleSince < 90000 ? "awaiting" : "held",
+      code: Date.now()-lineIdleSince < 90000 ? null : "LINE_RETRY_REQUIRED"};
+  } else lineIdleSince = null;
   const fingerprint = JSON.stringify(state) + lineCode;
   if (!force && fingerprint === rendered) return;
   rendered = fingerprint;
@@ -378,13 +385,13 @@ async function render() {
       text("通常は自動で検出します。画面が変わらないときだけ、検出状態を更新してください。", "small");
     } else {
       const check = state.lineCheck ?? { state: "idle", pinAvailable: false };
-      const pending = ["preparing", "sending"].includes(check.state);
+      const pending = ["awaiting", "preparing", "sending"].includes(check.state);
       const sameBrowser = check.state !== "browser_mismatch";
       text("LINEを検出しました。6桁の番号で通知先を確認します。", "success");
       if (!sameBrowser) {
         text("設定を始めたブラウザへ戻ってください。そちらを使えない場合は、下の補助欄でコードを再発行し、LINEへ送り直してください。", "next-action");
       } else if (pending) {
-        text("確認番号をLINEへ送っています。届いた番号は、送信状況の更新後にこの画面へ入力できます。", "next-action");
+        text("確認番号の送信状況を確認しています。届いた番号は、状況の更新後にこの画面へ入力できます。", "next-action");
       } else if (check.pinAvailable) {
         text("次に：LINEに届いている6桁を入力し、「確認する」を押してください。", "next-action");
       } else {
@@ -577,6 +584,6 @@ async function render() {
 refresh().catch(showError);
 setInterval(() => {
   if (!busy && state?.state === "line_pending" &&
-      (!state.lineDetected || ["preparing", "sending"].includes(state.lineCheck?.state)))
+      (!state.lineDetected || ["awaiting", "preparing", "sending"].includes(state.lineCheck?.state)))
     refresh().catch(showError);
 }, 3000);

@@ -134,3 +134,13 @@ test("interrupted delivery leases show uncertainty and rate wait without mutatin
   f.advance(90001);const after=await readLineCheckStatus(f.ctx,store,actor.sessionHash);assert.equal(after.state,"uncertain");assert.equal(after.code,"LINE_RESULT_UNKNOWN");assert.equal(after.pinAvailable,true);
   assert.equal((await f.db.prepare("SELECT state FROM line_check_deliveries").first()).state,"sending");assert.equal(f.pushes.length,1);
 });
+
+for(const expiry of ["before-delivery","during-quota"])test(`shared webhook deadline ${expiry} holds without sending and manual recovery stays available`,async t=>{
+  const f=await setup(t),controller=new AbortController(),tasks=[];f.ctx.lineCheckSignal=controller.signal;
+  const {code}=await issueLineCode(f.ctx,actor);await consumeLineCode(f.ctx,event(code),{deferCheck:task=>tasks.push(task)});
+  assert.equal(tasks.length,1);assert.equal(f.pushes.length,0);assert.ok((await f.db.prepare("SELECT consumed_at FROM line_links").first()).consumed_at);
+  if(expiry==="before-delivery")controller.abort();else f.onQuota(()=>controller.abort());
+  await tasks[0]();assert.equal(f.pushes.length,0);const delivery=await f.db.prepare("SELECT state,error_code FROM line_check_deliveries").first();assert.equal(delivery.state,"held");assert.equal(delivery.error_code,"LINE_RETRY_REQUIRED");
+  assert.equal((await f.db.prepare("SELECT count(*) n FROM usage_reservations WHERE state<>'released'").first()).n,0);
+  f.advance(60001);await sendLineCheck(f.ctx,actor);await verifyLinePin(f.ctx,actor,f.pin());assert.equal(f.pushes.length,1);
+});

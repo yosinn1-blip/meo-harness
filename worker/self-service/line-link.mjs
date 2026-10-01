@@ -45,7 +45,7 @@ export async function issueLineCode(ctx, actor) {
   ]);
   return { code, expiresAt, addFriendUrl: ctx.env.SELF_LINE_FRIEND_URL };
 }
-export async function consumeLineCode(ctx, event) {
+export async function consumeLineCode(ctx, event, { deferCheck } = {}) {
   if (readSelfConfig(ctx.env).pilotMode) return;
   ensure(
     event.source?.type === "user" && typeof event.source.userId === "string" && event.source.userId.length > 0 && event.source.userId.length <= 256,
@@ -71,15 +71,22 @@ export async function consumeLineCode(ctx, event) {
   ]);
   ensure(result.every(r=>r.meta.changes===1),"LINE_CODE_INVALID");
   if(automatic) {
-    try {
-      const store=await getStore(ctx,snapshot.store_id);
-      ensure(store?.generation===snapshot.generation && store.pendingLineUserId===event.source.userId,"STORE_CHANGED",409);
-      await deliverLineCheck(ctx,{store,sessionHash:snapshot.session_hash,automatic:true});
-    } catch(error) {
-      // Link consumption remains valid. Read-only status and explicit browser
-      // recovery handle quota holds, failures, unknown sends and interruptions.
-      return {ok:true,checkCode:error instanceof SelfError?error.code:"LINE_RESULT_UNKNOWN"};
-    }
+    const deliver = async () => {
+      try {
+        const store=await getStore(ctx,snapshot.store_id);
+        ensure(store?.generation===snapshot.generation && store.pendingLineUserId===event.source.userId,"STORE_CHANGED",409);
+        await deliverLineCheck(ctx,{store,sessionHash:snapshot.session_hash,automatic:true});
+        return {ok:true};
+      } catch(error) {
+        // Link consumption remains valid. Read-only status and explicit browser
+        // recovery handle quota holds, failures, unknown sends and interruptions.
+        return {ok:true,checkCode:error instanceof SelfError?error.code:"LINE_RESULT_UNKNOWN"};
+      }
+    };
+    // The webhook supervisor consumes the whole ordered event batch before
+    // waiting on slow automatic delivery. Direct callers keep awaited behavior.
+    if (deferCheck) deferCheck(deliver);
+    else return deliver();
   }
   return {ok:true};
 }

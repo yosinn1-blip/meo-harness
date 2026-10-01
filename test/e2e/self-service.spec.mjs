@@ -613,3 +613,29 @@ test("automatic PIN expiry and changing LINE invalidate old verification and nev
   const newPin=(await(await fixture(page,"pin")).json()).pin;await page.getByLabel("確認番号",{exact:true}).fill(newPin);await page.getByRole("button",{name:"確認する",exact:true}).click();await expect(page.getByRole("heading",{name:"準備ができました"})).toBeVisible();
   expect(app.pushes.map(x=>x.to)).toEqual(["line-fixture","line-other"]);expect(app.writes).toEqual([]);
 });
+
+test("automatic detection before the delivery claim keeps polling until the PIN is ready",async({page})=>{
+  await fixture(page,"scenario",{autoPin:true});await connect(page);await page.getByRole("button",{name:"この店舗を使う"}).click();
+  const code=await page.getByTestId("line-code").textContent();await fixture(page,"line",{code,userId:"line-fixture"});
+  let idleSeen=false,polls=0;
+  await page.route("**/api/self/status",async route=>{
+    const response=await route.fetch(),state=await response.json();polls++;
+    if(!idleSeen&&state.lineDetected){idleSeen=true;state.lineCheck={state:"idle",code:null,pinAvailable:false,expiresAt:null,retryAfterMs:0};}
+    await route.fulfill({response,json:state});
+  });
+  await page.reload();await expect(page.getByLabel("確認番号",{exact:true})).toBeVisible({timeout:9000});
+  expect(idleSeen).toBe(true);expect(polls).toBeGreaterThan(1);expect(app.pushes).toHaveLength(1);expect(app.writes).toEqual([]);
+});
+
+test("automatic idle wait is bounded and offers manual recovery without sending",async({page})=>{
+  await fixture(page,"scenario",{autoPin:true});await connect(page);await page.getByRole("button",{name:"この店舗を使う"}).click();
+  const code=await page.getByTestId("line-code").textContent();await fixture(page,"line",{code,userId:"line-fixture"});
+  await page.route("**/api/self/status",async route=>{
+    const response=await route.fetch(),state=await response.json();state.lineCheck={state:"idle",code:null,pinAvailable:false,expiresAt:null,retryAfterMs:0};await route.fulfill({response,json:state});
+  });
+  await page.reload();await page.getByText("確認番号が届かない・期限が切れたとき",{exact:true}).click();
+  await expect(page.getByRole("button",{name:"確認番号をLINEに送る",exact:true})).toBeDisabled();
+  await page.evaluate(()=>{const realNow=Date.now;Date.now=()=>realNow()+91000;});
+  await expect(page.getByRole("button",{name:"確認番号をLINEに送る",exact:true})).toBeEnabled({timeout:9000});
+  await expect(page.getByText("LINEの送信を保留しました",{exact:false})).toBeVisible();expect(app.pushes).toHaveLength(1);expect(app.writes).toEqual([]);
+});

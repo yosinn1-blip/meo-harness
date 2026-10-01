@@ -34,14 +34,16 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
   }
   // A webhook waitUntil has a finite lifetime. Preserve each existing timeout
   // and also cap the combined automatic quota+push I/O at 20 seconds.
-  const deadline = automatic ? AbortSignal.timeout(20000) : null;
+  const deadline = automatic ? AbortSignal.any([AbortSignal.timeout(20000),...(ctx.lineCheckSignal?[ctx.lineCheckSignal]:[])]) : null;
   const io = deadline ? {...ctx,fetchImpl:(url,init={})=>ctx.fetchImpl(url,{...init,signal:init.signal?AbortSignal.any([init.signal,deadline]):deadline})} : ctx;
   let reserved = false, dispatched = false;
   try {
+    ensure(!deadline?.aborted,"LINE_RETRY_REQUIRED",429);
     await consumeRate(ctx,{bucket:"test-minute:"+store.id,limit:1,windowMs:60000});
     await consumeRate(ctx,{bucket:"test-day:"+store.id+":"+dateKeys(ctx.now()).day,limit:3,windowMs:86400000});
     const reservation = await reservePush(io,{id,storeId:store.id});
     ensure(reservation.ok,reservation.code,429); reserved = true;
+    ensure(!deadline?.aborted,"LINE_RETRY_REQUIRED",429);
     let random;
     do { random = crypto.getRandomValues(new Uint32Array(1))[0]; } while(random>=4294000000);
     const pin=String(random%1000000).padStart(6,"0"), pinHash=await hmac(pin,ctx.env.SELF_RATE_KEY+":"+store.id);
@@ -62,6 +64,7 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
       AND EXISTS(SELECT 1 FROM line_checks WHERE store_id=? AND pin_hash=? AND generation=? AND session_hash=? AND expires_at>?)`)
       .bind(ctx.now(),store.id,attemptId,ctx.now(),...identity(store,sessionHash,ctx.now()),store.id,pinHash,store.generation,sessionHash,ctx.now()).run();
     ensure(gate.meta.changes===1,"STORE_CHANGED",409);
+    ensure(!deadline?.aborted,"LINE_RETRY_REQUIRED",429);
     dispatched = true;
     await sendReservedPush(io,{id,to:store.pendingLineUserId,messages:[{type:"text",text:`MEO Harness 確認番号: ${pin}\n5分以内に、登録を始めたブラウザの画面へ戻って入力してください。`}],retryKey:attemptId});
     await finish("sent");

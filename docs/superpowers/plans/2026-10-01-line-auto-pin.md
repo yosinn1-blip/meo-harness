@@ -45,7 +45,7 @@ Files: status.mjs; ui/app.js.txt; test/support/self-browser.mjs; test/e2e/self-s
 - [x] Commit tested UI/status/docs.
 
 ### Task3: review and publish-ready local deliverables
-- [ ] Fresh reviewer checks the whole diff from dd89727, plan/safety requirements and failure modes. Fix significant findings with RED→GREEN/full required suites.
-- [ ] Separate patch/commit from dd89727; list migration/flag/live smoke-test approval, expected shared-budget impact and rollback.
-- [ ] Adjust the flyer in a separate clearly unpublished draft folder if old manual PIN instruction differs. Keep current flyer/Library v2 untouched. Render/QR/text checks with existing tools.
+- [x] Fresh reviewer checks the whole diff from dd89727, plan/safety requirements and failure modes. Fix significant findings with RED→GREEN/full required suites.
+- [x] Separate patch/commit from dd89727; list migration/flag/live smoke-test approval, expected shared-budget impact and rollback.
+- [x] Adjust the flyer in a separate clearly unpublished draft folder if old manual PIN instruction differs. Keep current flyer/Library v2 untouched. Render/QR/text checks with existing tools.
 - [ ] Report completed local artifacts to parent; coordinate note-write window with iCloud child via parent, then reread/append/readback notes.
