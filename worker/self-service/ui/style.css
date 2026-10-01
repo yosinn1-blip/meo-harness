@@ -146,7 +146,7 @@ button,
   text-decoration: none;
   min-height: 48px;
 }
-button.secondary {
+button.secondary, .button.secondary {
   background: #e9f1f5;
   color: var(--blue);
 }
@@ -405,7 +405,7 @@ a {
   .notes {
     margin-top: 24px;
   }
-  button {
+  button, .button {
     width: 100%;
     margin-right: 0;
   }

@@ -260,6 +260,8 @@ export async function startTestApp() {
             if (data.pilot) Object.assign(env, await pilotSettings(data.pilotOwner ?? "alice"));
             env.SELF_REGISTRATION_ENABLED = String(settings.pilot ? false : settings.registration);
             env.SELF_LINE_AUTO_PIN_ENABLED = String(settings.autoPin);
+            if (data.lineFriendUrl !== undefined)
+              env.SELF_LINE_FRIEND_URL = data.lineFriendUrl;
             if (data.drafts !== undefined)
               env.SELF_MONTHLY_DRAFT_LIMIT = String(data.drafts);
             if (data.activeLimit !== undefined)

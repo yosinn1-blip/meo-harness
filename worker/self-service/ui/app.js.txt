@@ -2,6 +2,7 @@ const root = document.querySelector("#current-step"),
   errorBox = document.querySelector("#error");
 let state = null,
   lineCode = null,
+  lineCodeExpiresAt = 0,
   nextCursor = null,
   challengeToken = "",
   challengeWidget = null,
@@ -113,6 +114,24 @@ function link(label, url) {
   a.rel = "noopener noreferrer";
   return a;
 }
+function lineChatUrl() {
+  try {
+    const url = new URL(state.lineFriendUrl);
+    const match = /^\/R\/ti\/p\/([^/]+)\/?$/.exec(url.pathname);
+    if (url.origin !== "https://line.me" || url.username || url.password ||
+        url.search || url.hash || !match) return null;
+    const id = decodeURIComponent(match[1]);
+    if (!/^@[A-Za-z0-9._-]{1,64}$/.test(id)) return null;
+    return "https://line.me/R/oaMessage/" + encodeURIComponent(id);
+  } catch { return null; }
+}
+function liveLineCode() {
+  return typeof lineCode === "string" && /^MEOS-[A-HJ-NP-Z2-9]{12}$/.test(lineCode) &&
+    Number.isFinite(lineCodeExpiresAt) && lineCodeExpiresAt > Date.now();
+}
+function lineReturnHelp(after = "送ったら") {
+  return node("p", after + "、スマホのアプリ切替で、この画面を開いているSafari・Chromeへ戻ってください。登録を始めたタブを選ぶと続きを進められます。", "small");
+}
 async function loadChallenge() {
   if (!state.turnstileSiteKey || challengeToken) return;
   const target = document.querySelector("#challenge");
@@ -166,13 +185,21 @@ async function google(intent) {
 }
 async function refresh(force = false) {
   state = await api("status");
+  if (state.lineDetected || !["location_selected", "line_pending"].includes(state.state)) {
+    lineCode = null;
+    lineCodeExpiresAt = 0;
+  }
   if (state.lineAutoPin && state.lineDetected && state.lineCheck?.state === "idle") {
     lineIdleSince ??= Date.now();
     state.lineCheck = {...state.lineCheck,
       state: Date.now()-lineIdleSince < 90000 ? "awaiting" : "held",
       code: Date.now()-lineIdleSince < 90000 ? null : "LINE_RETRY_REQUIRED"};
   } else lineIdleSince = null;
-  const fingerprint = JSON.stringify(state) + lineCode;
+  // This countdown is not displayed. Its ticking value must not replace the
+  // input or focus when the user returns from LINE to read the same PIN.
+  const displayState = {...state, lineCheck: state.lineCheck
+    ? {...state.lineCheck, retryAfterMs: 0} : state.lineCheck};
+  const fingerprint = JSON.stringify(displayState) + lineCode + liveLineCode();
   if (!force && fingerprint === rendered) return;
   rendered = fingerprint;
   await render();
@@ -182,7 +209,9 @@ async function mutate(path, body = {}) {
   await refresh(true);
 }
 async function code() {
-  lineCode = (await api("line/code", {})).code;
+  const result = await api("line/code", {});
+  lineCode = result.code;
+  lineCodeExpiresAt = result.expiresAt;
   await refresh(true);
 }
 function progress() {
@@ -347,36 +376,56 @@ async function render() {
     text(state.store.title);
     if (!state.lineDetected) {
       text(state.lineAutoPin
-        ? "次に：登録コードをLINEへ送り、LINEに届く6桁の確認番号を読んでから、このブラウザの登録画面へ戻ってください。"
-        : "次に：登録コードをLINEへ送ります。送った後は、設定を始めたこのブラウザの登録画面へ戻ってください。", "next-action");
-      if (lineCode) {
-        root.append(node("h3", "1. 登録コードをコピー"));
+        ? "次に：下のボタンでLINEを開き、送信ボタンを押します。届く6桁を読んでから、この登録画面へ戻ってください。"
+        : "次に：下のボタンでLINEを開き、送信ボタンを押します。その後、この登録画面へ戻ってください。", "next-action");
+      if (lineCode && !liveLineCode()) {
+        text("登録コードの期限が切れました。再発行してからLINEへ送ってください。", "next-action");
+        root.append(button("コードを再発行", code));
+      } else if (lineCode) {
+        const chat = lineChatUrl();
+        root.append(node("h3", "1. LINEで送信する"));
+        if (chat) {
+          const open = link("LINEを開く（コード入力済み）", chat + "/?" + encodeURIComponent(lineCode));
+          open.referrerPolicy = "no-referrer";
+          open.onclick = (event) => {
+            if (busy || !liveLineCode() || state.lineDetected || lineChatUrl() !== chat) {
+              event.preventDefault();
+              if (!busy) refresh(true).catch(showError);
+            }
+          };
+          root.append(open);
+          text("スマホのLINEでMEO Harness宛てにコードが入力されます。内容を確認し、LINEの送信ボタンを押してください。", "small");
+        } else text("下の補助欄でコードをコピーし、MEO HarnessのLINEトークへ送ってください。");
+        text("登録コードは15分間有効です。", "small");
+        root.append(node("h3", state.lineAutoPin ? "2. LINEの6桁を読んで、この画面へ戻る" : "2. この画面へ戻る"));
+        root.append(lineReturnHelp());
+        text(state.lineAutoPin
+          ? "LINEに届いた6桁をこの画面へ入力します。番号は5分間有効です。届かない場合も、この画面で送信状況を確認できます。"
+          : "LINEを検出すると「確認番号をLINEに送る」が表示されます。押した後、LINEで6桁を読み、この画面で入力します。");
+        const help = node("details", undefined, "setup-recovery");
+        help.open = !chat;
+        help.append(node("summary", "LINEが開かない・友だち追加・PCから登録する方"));
+        help.append(node("p", "友だち追加の画面が出たらMEO Harnessを追加し、この登録画面へ戻って上のLINEボタンをもう一度押してください。ブロック中は解除してください。", "small"));
+        help.append(node("p", "LINEが未インストールの場合は案内に沿ってインストールし、同じブラウザの登録タブへ戻ります。コードの期限が切れたら再発行してください。", "small"));
+        help.append(node("p", "PCからの登録や、コードが入力されない場合は、下のコードをコピーしてLINEのMEO Harnessトークへ貼り付け、送信します。", "small"));
         const c = node("output", lineCode, "code");
         c.dataset.testid = "line-code";
-        root.append(
+        help.append(
           c,
-          button("登録コードをコピー", () => navigator.clipboard.writeText(lineCode)),
+          button("登録コードをコピー", async () => {
+            if (!liveLineCode()) return refresh(true);
+            await navigator.clipboard.writeText(lineCode);
+          }, "secondary"),
         );
-        text("このコードの有効期限は15分です。", "small");
-        root.append(node("h3", "2. LINEでコードを送信"));
-        root.append(link("LINEで友だち追加", state.lineFriendUrl));
-        text(state.lineAutoPin
-          ? "MEO Harnessを友だち追加し、トークに登録コードを貼り付けて送ってください。確認番号（6桁）をこのLINEへ送ります。"
-          : "MEO Harnessを友だち追加し、トークに登録コードを貼り付けて送ってください。");
-        const qrHelp = node("details");
-        qrHelp.append(node("summary", "別の端末でLINEを開く方：QRコードを表示"));
+        if (state.lineFriendUrl) help.append(link("LINEで友だち追加", state.lineFriendUrl));
         const qr = node("img", undefined, "qr");
         qr.src = "/self/assets/line-qr.svg";
         qr.alt = "LINE友だち追加のQRコード";
-        qrHelp.append(qr);
-        root.append(qrHelp);
-        root.append(node("h3", state.lineAutoPin ? "3. LINEの6桁を確認してから戻る" : "3. この登録画面へ戻る"));
-        text(state.lineAutoPin
-          ? "LINEに届いた6桁を確認したら、設定を始めたこのブラウザへ戻って入力します。番号の有効期限は5分です。届かない場合も、この画面で送信状況を確認できます。"
-          : "LINEの中で新しく開いた画面ではなく、設定を始めたブラウザへ戻ってください。LINEを検出すると、確認番号を送るボタンが表示されます。");
-        root.append(button("コードを再発行", code, "secondary"));
+        help.append(node("p", "別の端末でLINEを開く方：友だち追加QR", "small"), qr,
+          button("コードを再発行", code, "secondary"));
+        root.append(help);
       } else {
-        text("登録コードが表示されていない場合は、下のボタンでコードを表示してLINEへ送ってください。");
+        text("中断・画面更新でコードが消えた場合は、下のボタンで新しいコードを表示します。前のコードは使えなくなります。", "small");
         root.append(button("LINEの登録コードを表示", code));
       }
       root.append(
@@ -401,6 +450,12 @@ async function render() {
       }
       if (check.state === "sent" && check.pinAvailable)
         text("LINEに確認番号を送りました。届いている6桁を入力してください。", "success");
+      if (sameBrowser && check.pinAvailable && !state.lineAutoPin && lineChatUrl()) {
+        const open = link("LINEで確認番号を見る", lineChatUrl());
+        open.classList.add("secondary");
+        open.referrerPolicy = "no-referrer";
+        root.append(open, lineReturnHelp("番号を読んだら"));
+      }
       if (check.code && sameBrowser)
         text(state.lineAutoPin && check.code === "LINE_RESULT_UNKNOWN" && !check.pinAvailable
           ? "LINEへの送信結果を確認できません。現在使える確認番号がありません。新しい番号を送って確認してください。"
@@ -584,6 +639,15 @@ async function render() {
   if (state.notice) showError({ code: state.notice });
 }
 refresh().catch(showError);
+function resumeLine() {
+  if (!busy && state?.state === "line_pending") refresh().catch(showError);
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") resumeLine();
+});
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) resumeLine();
+});
 setInterval(() => {
   if (!busy && state?.state === "line_pending" &&
       (!state.lineDetected || ["awaiting", "preparing", "sending"].includes(state.lineCheck?.state) ||
