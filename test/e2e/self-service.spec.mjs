@@ -56,6 +56,14 @@ async function connect(page) {
   await page.getByRole("button", { name: "初めての方：Googleでお店を接続", exact: true }).click();
   await page.getByRole("button", { name: "架空Googleで許可" }).click();
 }
+async function oneReturnScreens(page,stage) {
+  for(const [width,name] of [[320,"mobile320"],[375,"mobile"],[1280,"desktop"]]){
+    await page.setViewportSize({width,height:812});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.screenshot({path:`output/self-service/one-return-${name}-${stage}.png`,fullPage:true});
+  }
+  await page.setViewportSize({width:375,height:812});
+}
 async function onboard(page) {
   await connect(page);
   await page
@@ -532,4 +540,76 @@ test("LINE recovery reissues a code and requires confirmation of the new notific
   await expect(page.getByRole("heading", { name: "準備ができました" })).toBeVisible();
   expect(app.pushes.map(push => push.to)).toEqual(["line-fixture", "line-other"]);
   expect(app.writes).toEqual([]);
+});
+
+test("automatic PIN arrives in the single LINE visit and reload/back never sends another one", async ({ page }) => {
+  await fixture(page,"scenario",{autoPin:true});
+  await page.setViewportSize({width:375,height:812});
+  let manual=0;page.on("request",r=>{if(r.url().endsWith("/api/self/line/test"))manual++;});
+  await connect(page);await page.getByRole("button",{name:"この店舗を使う"}).click();
+  const code=await page.getByTestId("line-code").textContent();
+  await oneReturnScreens(page,"code");
+  const [line]=await Promise.all([page.waitForEvent("popup"),page.getByRole("link",{name:"LINEで友だち追加",exact:true}).click()]);
+  await line.setViewportSize({width:375,height:812});
+  await line.getByLabel("登録コード",{exact:true}).fill(code);
+  await line.getByRole("button",{name:"LINEへコード送信（架空）"}).click();
+  await expect(line.locator("#received")).toContainText("確認番号:");
+  const pin=(await line.locator("#received").textContent()).match(/\d{6}/)[0];
+  await line.screenshot({path:"output/self-service/one-return-mock-line-pin.png",fullPage:true});
+  await line.close();await page.bringToFront();
+  expect(app.pushes).toHaveLength(1);
+  await expect(page.getByLabel("確認番号",{exact:true})).toBeVisible();
+  await page.goto(app.baseURL+"/self/help/quickstart");
+  await page.goBack();await expect(page.getByLabel("確認番号",{exact:true})).toBeVisible();
+  await page.reload();await expect(page.getByLabel("確認番号",{exact:true})).toBeVisible();
+  expect(app.pushes).toHaveLength(1);expect(manual).toBe(0);
+  const status=await(await page.request.get(app.baseURL+"/api/self/status")).json();
+  expect(status.lineCheck.state).toBe("sent");expect(status.lineCheck.pinAvailable).toBe(true);
+  expect(status.lineCheck).not.toHaveProperty("pin");
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await oneReturnScreens(page,"confirm");
+  await page.getByLabel("確認番号",{exact:true}).fill(pin);
+  await page.getByRole("button",{name:"確認する",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"準備ができました"})).toBeVisible();
+  await page.getByRole("button",{name:"利用を開始する"}).click();
+  await expect(page.getByLabel("利用条件を確認しました")).toBeFocused();
+  await oneReturnScreens(page,"ready");
+  await page.getByLabel("利用条件を確認しました").check();
+  await page.getByRole("button",{name:"利用を開始する"}).click();
+  await expect(page.getByRole("heading",{name:"稼働中",exact:true})).toBeVisible();
+  expect(app.writes).toEqual([]);expect(manual).toBe(0);
+});
+
+for(const failure of ["unknown","failed","quota"])test(`automatic PIN ${failure} offers explicit recovery without reload or back resends`,async({page})=>{
+  await fixture(page,"scenario",{autoPin:true,lineFailure:failure==="quota"?null:failure,...(failure==="quota"?{consumed:200}:{})});
+  await page.setViewportSize({width:375,height:812});
+  await connect(page);await page.getByRole("button",{name:"この店舗を使う"}).click();
+  const code=await page.getByTestId("line-code").textContent();await fixture(page,"line",{code,userId:"line-fixture"});
+  await page.reload();
+  const expectedPushes=failure==="quota"?0:1;expect(app.pushes).toHaveLength(expectedPushes);
+  if(failure==="quota")await expect(page.getByLabel("確認番号",{exact:true})).toHaveCount(0);
+  else {
+    await expect(page.getByLabel("確認番号",{exact:true})).toBeVisible();
+    await page.getByText("確認番号が届かない・期限が切れたとき",{exact:true}).click();
+  }
+  await page.getByRole("button",{name:"確認番号をLINEに送る",exact:true}).click();
+  await expect(page.getByRole("alert")).toContainText("操作回数");expect(app.pushes).toHaveLength(expectedPushes);
+  await fixture(page,"scenario",{lineFailure:null,consumed:0});await fixture(page,"advance",{ms:60001});
+  if(failure!=="quota")await page.getByText("確認番号が届かない・期限が切れたとき",{exact:true}).click();
+  await sendPin(page);expect(app.pushes).toHaveLength(expectedPushes+1);
+  const pin=(await(await fixture(page,"pin")).json()).pin;
+  await page.getByLabel("確認番号",{exact:true}).fill(pin);await page.getByRole("button",{name:"確認する",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"準備ができました"})).toBeVisible();expect(app.writes).toEqual([]);
+});
+
+test("automatic PIN expiry and changing LINE invalidate old verification and never automatically retry",async({page})=>{
+  await fixture(page,"scenario",{autoPin:true});await connect(page);await page.getByRole("button",{name:"この店舗を使う"}).click();
+  const code=await page.getByTestId("line-code").textContent();await fixture(page,"line",{code,userId:"line-fixture"});
+  const oldPin=(await(await fixture(page,"pin")).json()).pin;await fixture(page,"advance",{ms:300001});await page.reload();
+  await expect(page.getByText("確認番号の期限が切れたか",{exact:false})).toBeVisible();await expect(page.getByLabel("確認番号",{exact:true})).toHaveCount(0);expect(app.pushes).toHaveLength(1);
+  await page.getByText("通知先のLINEを変更する・登録コードを送り直す",{exact:true}).click();await page.getByRole("button",{name:"コードを再発行",exact:true}).click();
+  const fresh=await page.getByTestId("line-code").textContent();expect(fresh).not.toBe(code);await fixture(page,"line",{code:fresh,userId:"line-other"});await page.reload();
+  await page.getByLabel("確認番号",{exact:true}).fill(oldPin);await page.getByRole("button",{name:"確認する",exact:true}).click();await expect(page.getByRole("alert")).toContainText("確認番号が違うか");
+  const newPin=(await(await fixture(page,"pin")).json()).pin;await page.getByLabel("確認番号",{exact:true}).fill(newPin);await page.getByRole("button",{name:"確認する",exact:true}).click();await expect(page.getByRole("heading",{name:"準備ができました"})).toBeVisible();
+  expect(app.pushes.map(x=>x.to)).toEqual(["line-fixture","line-other"]);expect(app.writes).toEqual([]);
 });

@@ -3,6 +3,7 @@ import { findOwnedStore } from "./store-repository.mjs";
 import { readSelfConfig, canRegisterSelf } from "./config.mjs";
 import { dateKeys } from "./contracts.mjs";
 import { draftBudgetScope } from "./budget.mjs";
+import { readLineCheckStatus } from "./line-check-delivery.mjs";
 export async function getSelfStatus(ctx, request) {
   const c = readSelfConfig(ctx.env),
     s = await readSession(ctx, request);
@@ -15,6 +16,7 @@ export async function getSelfStatus(ctx, request) {
     registrationAllowed: await canRegisterSelf(ctx, s?.owner_sub),
     pilotMode: c.pilotMode,
     processingEnabled: c.processingEnabled,
+    lineAutoPin: c.autoLinePin,
     limits: c.limits,
     termsVersion: ctx.env.SELF_TERMS_VERSION ?? null,
     turnstileSiteKey: ctx.env.TURNSTILE_SITE_KEY ?? null,
@@ -82,6 +84,7 @@ export async function getSelfStatus(ctx, request) {
     store: { id: store.id, title: store.title },
     lineDetected: Boolean(store.pendingLineUserId),
     lineVerified: Boolean(store.lineVerifiedAt),
+    lineCheck: await readLineCheckStatus(ctx,store,s.token_hash),
     lastCheckedAt: store.lastPolledAt,
     lastError: store.lastError,
     usage: usage.results.map((x) => ({

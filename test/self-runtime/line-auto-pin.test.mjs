@@ -4,6 +4,8 @@ import { withD1, applySchema, fixtureEnv, seedStore } from "../support/self-runt
 import { createSelfContext } from "../../worker/self-service/config.mjs";
 import { issueLineCode, consumeLineCode, sendLineCheck, verifyLinePin } from "../../worker/self-service/line-link.mjs";
 import { disconnectStore } from "../../worker/self-service/lifecycle.mjs";
+import { readLineCheckStatus } from "../../worker/self-service/line-check-delivery.mjs";
+import { findOwnedStore } from "../../worker/self-service/store-repository.mjs";
 const actor = { sub: "alice", sessionHash: "browser-a" };
 const event = (code, userId = "line-a") => ({ type: "message", source: { type: "user", userId }, message: { type: "text", text: code } });
 async function setup(t, options = {}) {
@@ -73,13 +75,19 @@ test("a concurrent manual click cannot replace the automatic in-flight PIN or do
   await assert.rejects(()=>sendLineCheck(f.ctx,actor),e=>e.code==="LINE_CHECK_BUSY");release();await automatic;
   assert.equal(f.pushes.length,1);await verifyLinePin(f.ctx,actor,f.pin());
 });
-for(const operation of ["reissue","disconnect"])test(`${operation} during quota reservation cancels automatic dispatch and retains newer state`,async t=>{
+for(const operation of ["reissue","disconnect","session-revoke","session-expire"])test(`${operation} during quota reservation cancels automatic dispatch and retains newer state`,async t=>{
   const f=await setup(t);const {code}=await issueLineCode(f.ctx,actor);let fresh;
-  f.onQuota(async()=>{if(operation==="reissue")fresh=await issueLineCode(f.ctx,actor);else await disconnectStore(f.ctx,actor);});
+  f.onQuota(async()=>{
+    if(operation==="reissue")fresh=await issueLineCode(f.ctx,actor);
+    else if(operation==="disconnect")await disconnectStore(f.ctx,actor);
+    else if(operation==="session-revoke")await f.db.prepare("DELETE FROM sessions").run();
+    else await f.db.prepare("UPDATE sessions SET expires_at=0").run();
+  });
   await consumeLineCode(f.ctx,event(code));assert.equal(f.pushes.length,0);
-  assert.equal((await f.db.prepare("SELECT count(*) n FROM line_check_deliveries").first()).n,0);
+  assert.equal((await f.db.prepare("SELECT count(*) n FROM line_check_deliveries").first()).n,operation.startsWith("session")?1:0);
   assert.equal((await f.db.prepare("SELECT count(*) n FROM line_checks").first()).n,0);
-  const row=await f.db.prepare("SELECT state FROM stores").first();if(operation==="reissue")assert.equal(row.state,"line_pending");else assert.equal(row,null);
+  const row=await f.db.prepare("SELECT state FROM stores").first();if(operation!=="disconnect")assert.equal(row.state,"line_pending");else assert.equal(row,null);
+  assert.equal((await f.db.prepare("SELECT count(*) n FROM usage_reservations WHERE state<>'released'").first()).n,0);
   if(fresh){f.advance(60001);await consumeLineCode(f.ctx,event(fresh.code,"new-target"));assert.equal(f.pushes[0].to,"new-target");}
 });
 test("manual recovery keeps rate/daily caps and old PINs fail after reissue or expiry",async t=>{
@@ -106,4 +114,23 @@ test("flag off keeps deliberate manual PIN sending and the old six-column PIN sc
   assert.equal((await f.db.prepare("SELECT count(*) n FROM line_check_deliveries").first()).n,1);
   await f.db.prepare("DELETE FROM line_links WHERE store_id=?").bind(f.store.id).run();
   assert.equal((await f.db.prepare("SELECT count(*) n FROM line_check_deliveries").first()).n,0);
+});
+
+test("read-only PIN status hides secrets, survives unknown delivery and expires without dispatch",async t=>{
+  const f=await setup(t);f.setScenario("unknown");const {code}=await issueLineCode(f.ctx,actor);await consumeLineCode(f.ctx,event(code));
+  const store=await findOwnedStore(f.ctx,actor.sub);
+  const status=await readLineCheckStatus(f.ctx,store,actor.sessionHash);
+  assert.deepEqual(Object.keys(status).sort(),["code","expiresAt","pinAvailable","retryAfterMs","state"]);
+  assert.equal(status.state,"uncertain");assert.equal(status.code,"LINE_RESULT_UNKNOWN");assert.equal(status.pinAvailable,true);
+  assert.equal(JSON.stringify(status).includes(f.pin()),false);
+  assert.equal((await readLineCheckStatus(f.ctx,store,"wrong-browser")).pinAvailable,false);
+  f.advance(300001);assert.equal((await readLineCheckStatus(f.ctx,store,actor.sessionHash)).pinAvailable,false);assert.equal(f.pushes.length,1);
+});
+test("interrupted delivery leases show uncertainty and rate wait without mutating or replaying",async t=>{
+  const f=await setup(t);const {code}=await issueLineCode(f.ctx,actor);await consumeLineCode(f.ctx,event(code));
+  await f.db.prepare("UPDATE line_check_deliveries SET state='sending',lease_until=?").bind(10000+90000).run();
+  const store=await findOwnedStore(f.ctx,actor.sub);
+  const before=await readLineCheckStatus(f.ctx,store,actor.sessionHash);assert.equal(before.state,"sending");assert.equal(before.retryAfterMs,90000);
+  f.advance(90001);const after=await readLineCheckStatus(f.ctx,store,actor.sessionHash);assert.equal(after.state,"uncertain");assert.equal(after.code,"LINE_RESULT_UNKNOWN");assert.equal(after.pinAvailable,true);
+  assert.equal((await f.db.prepare("SELECT state FROM line_check_deliveries").first()).state,"sending");assert.equal(f.pushes.length,1);
 });

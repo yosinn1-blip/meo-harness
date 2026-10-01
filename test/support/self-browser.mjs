@@ -61,7 +61,8 @@ export async function startTestApp() {
   });
   await applySchema(db);
   let offset = 0;
-  const now = () => Date.now() + offset;
+  const realNow = Date.now;
+  const now = () => realNow() + offset;
   const f = await googleFixture({ now });
   const fixtureKey = crypto.randomUUID();
   const unexpected = [],
@@ -72,6 +73,8 @@ export async function startTestApp() {
     locations: 1,
     googleFailure: false,
     registration: true,
+    autoPin: false,
+    lineFailure: null,
     reviews: [],
     quota: 200,
     consumed: 0,
@@ -154,6 +157,8 @@ export async function startTestApp() {
         pushes.push(body);
         lastPin =
           body.messages[0]?.text?.match(/確認番号: (\d{6})/)?.[1] ?? lastPin;
+        if (settings.lineFailure === "unknown") throw new Error("fixture LINE result unknown after dispatch");
+        if (settings.lineFailure === "failed") return new Response(null,{status:400});
         return Response.json(
           {},
           { headers: { "x-line-request-id": "fixture-accepted" } },
@@ -188,7 +193,9 @@ export async function startTestApp() {
             return;
           }
           const data = body.length ? JSON.parse(body) : {};
-          if (url.pathname === "/fixture/authorize") {
+          if (url.pathname === "/fixture/line-chat") {
+            response = new Response(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>架空LINE・ローカル検証専用</title><style>body{font:18px sans-serif;margin:24px;color:#111}input,button{font:inherit;padding:12px;max-width:100%;box-sizing:border-box}output{display:block;font-size:28px;margin-top:24px}p{line-height:1.7}</style><h1>架空LINE画面</h1><p>ローカル検証専用。実際のLINEへ接続・送信していません。</p><label for="code">登録コード</label><input id="code"><button id="send">LINEへコード送信（架空）</button><output id="received" aria-live="polite"></output><script>document.querySelector('#send').onclick=async()=>{const r=await fetch('/fixture/line',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:document.querySelector('#code').value,userId:'line-fixture'})});const p=await(await fetch('/fixture/pin')).json();document.querySelector('#received').textContent=r.ok&&p.pin?'確認番号: '+p.pin:'送信結果を登録画面で確認してください';};</script></html>`, {headers:{"Content-Type":"text/html; charset=utf-8"}});
+          } else if (url.pathname === "/fixture/authorize") {
             const original = new URL(
               "https://accounts.google.com/o/oauth2/v2/auth",
             );
@@ -223,28 +230,36 @@ export async function startTestApp() {
               ],
             });
             const pending = [];
-            response = await module.default.fetch(
-              new Request(baseURL + "/webhook/line-bot", {
-                method: "POST",
-                body: raw,
-                headers: {
-                  "X-Line-Signature": await hmac(raw, env.LINE_CHANNEL_SECRET),
+            // Browser fixture advances time for expiry/rate tests. The legacy
+            // webhook creates its own context, so scope the same clock to that
+            // entrypoint and its waitUntil work; never add a production override.
+            const savedNow = Date.now;
+            try {
+              Date.now = now;
+              response = await module.default.fetch(
+                new Request(baseURL + "/webhook/line-bot", {
+                  method: "POST",
+                  body: raw,
+                  headers: {
+                    "X-Line-Signature": await hmac(raw, env.LINE_CHANNEL_SECRET),
+                  },
+                }),
+                env,
+                {
+                  waitUntil(p) {
+                    pending.push(p);
+                  },
                 },
-              }),
-              env,
-              {
-                waitUntil(p) {
-                  pending.push(p);
-                },
-              },
-            );
-            await Promise.all(pending);
+              );
+              await Promise.all(pending);
+            } finally { Date.now = savedNow; }
           } else if (url.pathname === "/fixture/pin")
             response = Response.json({ pin: lastPin });
           else if (url.pathname === "/fixture/scenario") {
             Object.assign(settings, data);
             if (data.pilot) Object.assign(env, await pilotSettings(data.pilotOwner ?? "alice"));
             env.SELF_REGISTRATION_ENABLED = String(settings.pilot ? false : settings.registration);
+            env.SELF_LINE_AUTO_PIN_ENABLED = String(settings.autoPin);
             if (data.drafts !== undefined)
               env.SELF_MONTHLY_DRAFT_LIMIT = String(data.drafts);
             if (data.activeLimit !== undefined)
@@ -303,7 +318,7 @@ export async function startTestApp() {
   baseURL = "https://127.0.0.1:" + server.address().port;
   env = fixtureEnv(db, {
     SELF_PUBLIC_ORIGIN: baseURL,
-    SELF_LINE_FRIEND_URL: "https://line.me/R/ti/p/@fixture",
+    SELF_LINE_FRIEND_URL: baseURL + "/fixture/line-chat",
     STORES: await mf.getKVNamespace("STORES"),
   });
   ctx = module.createSelfContext(env, { now, fetchImpl });

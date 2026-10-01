@@ -74,3 +74,23 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
     throw error;
   }
 }
+
+// Read-only browser projection. The PIN, hashes and LINE destination stay private.
+export async function readLineCheckStatus(ctx, store, sessionHash) {
+  if (store.state !== "line_pending" || !store.pendingLineUserId) return null;
+  const link=await ctx.db.prepare("SELECT session_hash FROM line_links WHERE store_id=?").bind(store.id).first();
+  if (link?.session_hash !== sessionHash)
+    return {state:"browser_mismatch",code:"LINE_BROWSER_MISMATCH",pinAvailable:false,expiresAt:null,retryAfterMs:0};
+  const delivery=await ctx.db.prepare("SELECT state,error_code,lease_until FROM line_check_deliveries WHERE store_id=? AND generation=? AND session_hash=?")
+    .bind(store.id,store.generation,sessionHash).first();
+  const pin=await ctx.db.prepare("SELECT expires_at FROM line_checks WHERE store_id=? AND generation=? AND session_hash=? AND expires_at>? AND attempts<5")
+    .bind(store.id,store.generation,sessionHash,ctx.now()).first();
+  const rate=await ctx.db.prepare("SELECT MAX(expires_at) retry_at FROM rate_limits WHERE (bucket=? AND used>=1 OR bucket=? AND used>=3) AND expires_at>?")
+    .bind("test-minute:"+store.id,"test-day:"+store.id+":"+dateKeys(ctx.now()).day,ctx.now()).first();
+  const pending=delivery && ["preparing","sending"].includes(delivery.state);
+  const interrupted=pending && delivery.lease_until<=ctx.now();
+  return {state:interrupted?"uncertain":delivery?.state??"idle",
+    code:interrupted?"LINE_RESULT_UNKNOWN":delivery?.error_code??null,
+    pinAvailable:Boolean(pin),expiresAt:pin?.expires_at??null,
+    retryAfterMs:Math.max(0,(rate?.retry_at??0)-ctx.now(),pending&&!interrupted?delivery.lease_until-ctx.now():0)};
+}
