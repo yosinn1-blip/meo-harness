@@ -639,3 +639,43 @@ test("automatic idle wait is bounded and offers manual recovery without sending"
   await expect(page.getByRole("button",{name:"確認番号をLINEに送る",exact:true})).toBeEnabled({timeout:9000});
   await expect(page.getByText("LINEの送信を保留しました",{exact:false})).toBeVisible();expect(app.pushes).toHaveLength(1);expect(app.writes).toEqual([]);
 });
+
+for (const lineFailure of [null, "unknown"]) test(`open automatic PIN ${lineFailure ?? "sent"} screen expires without reload or another push`, async ({page}) => {
+  await fixture(page, "scenario", {autoPin: true, lineFailure});
+  let manual = 0;
+  page.on("request", r => {if (r.url().endsWith("/api/self/line/test")) manual++;});
+  await connect(page);
+  await page.getByRole("button", {name: "この店舗を使う"}).click();
+  const code = await page.getByTestId("line-code").textContent();
+  await fixture(page, "line", {code, userId: "line-fixture"});
+  await page.reload();
+  const input = page.getByLabel("確認番号", {exact: true});
+  await expect(input).toBeVisible();
+  const oldPin = (await (await fixture(page, "pin")).json()).pin;
+  await input.fill(oldPin);
+  await page.clock.install({time: new Date()});
+  await fixture(page, "advance", {ms: 240000});
+  await page.clock.fastForward(240000);
+  await expect(input).toHaveValue(oldPin);
+  expect(app.pushes).toHaveLength(1);
+  await fixture(page, "advance", {ms: 61000});
+  await page.clock.fastForward(61000);
+  await expect(input).toHaveCount(0, {timeout: 9000});
+  if (lineFailure === "unknown")
+    await expect(page.getByText("届いている番号は入力できます", {exact: false})).toHaveCount(0);
+  await expect(page.getByRole("button", {name: "確認番号をLINEに送る", exact: true})).toBeVisible();
+  expect(app.pushes).toHaveLength(1);
+  expect(manual).toBe(0);
+  expect(app.writes).toEqual([]);
+  await page.setViewportSize({width: 375, height: 812});
+  await page.screenshot({path: `../output/meo-line-one-return-20261001/pin-expiry-local-fix/expired-${lineFailure ?? "sent"}-375.png`, fullPage: true});
+  await fixture(page, "scenario", {lineFailure: null});
+  await sendPin(page);
+  const newPin = (await (await fixture(page, "pin")).json()).pin;
+  await input.fill(newPin);
+  await page.getByRole("button", {name: "確認する", exact: true}).click();
+  await expect(page.getByRole("heading", {name: "準備ができました"})).toBeVisible();
+  expect(app.pushes).toHaveLength(2);
+  expect(manual).toBe(1);
+  expect(app.writes).toEqual([]);
+});

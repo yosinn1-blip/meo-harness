@@ -397,12 +397,14 @@ async function render() {
       } else {
         text(check.state === "sent"
           ? "確認番号の期限が切れたか、照合の上限に達しました。新しい番号を送って確認してください。"
-          : "確認番号が届いていない場合は、「確認番号をLINEに送る」を押してください。届いた6桁をこのブラウザへ入力します。", "next-action");
+          : "次に：「確認番号をLINEに送る」を押してください。LINEで届いた6桁を読み、このブラウザへ戻って入力します。", "next-action");
       }
       if (check.state === "sent" && check.pinAvailable)
         text("LINEに確認番号を送りました。届いている6桁を入力してください。", "success");
       if (check.code && sameBrowser)
-        text(messages[check.code] ?? "送信を完了できませんでした。状態を確認して再送してください。", "small");
+        text(state.lineAutoPin && check.code === "LINE_RESULT_UNKNOWN" && !check.pinAvailable
+          ? "LINEへの送信結果を確認できません。現在使える確認番号がありません。新しい番号を送って確認してください。"
+          : messages[check.code] ?? "送信を完了できませんでした。状態を確認して再送してください。", "small");
       if (sameBrowser) {
         const send = button("確認番号をLINEに送る", async () => {
           try { await api("line/test", {}); }
@@ -584,6 +586,9 @@ async function render() {
 refresh().catch(showError);
 setInterval(() => {
   if (!busy && state?.state === "line_pending" &&
-      (!state.lineDetected || ["awaiting", "preparing", "sending"].includes(state.lineCheck?.state)))
+      (!state.lineDetected || ["awaiting", "preparing", "sending"].includes(state.lineCheck?.state) ||
+       (state.lineAutoPin && state.lineCheck?.pinAvailable &&
+        Number.isFinite(state.lineCheck.expiresAt) && state.lineCheck.expiresAt <= Date.now())))
+    // Recheck availability at expiry; the server remains the PIN authority.
     refresh().catch(showError);
 }, 3000);
