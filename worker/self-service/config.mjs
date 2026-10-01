@@ -66,6 +66,7 @@ export function readSelfConfig(env) {
     registrationEnabled,
     pilotMode,
     pilotEnabled,
+    autoLinePin: !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true" && env.SELF_LINE_AUTO_PIN_ENABLED === "true",
     processingEnabled: !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true",
     limits,
   };

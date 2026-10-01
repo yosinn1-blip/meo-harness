@@ -2,8 +2,9 @@ import { readSelfConfig } from "./config.mjs";
 import { LIMITS, dateKeys } from "./contracts.mjs";
 import { ensure, SelfError } from "./errors.mjs";
 import { sha256, hmac, safeEqual } from "./crypto.mjs";
-import { requireStore } from "./store-repository.mjs";
+import { getStore, requireStore } from "./store-repository.mjs";
 import { consumeRate } from "./abuse.mjs";
+import { deliverLineCheck } from "./line-check-delivery.mjs";
 export function authorizeLineActor({ source, registeredUserId, active }) {
   return Boolean(
     active &&
@@ -47,95 +48,46 @@ export async function issueLineCode(ctx, actor) {
 export async function consumeLineCode(ctx, event) {
   if (readSelfConfig(ctx.env).pilotMode) return;
   ensure(
-    event.source?.type === "user" && event.source.userId,
+    event.source?.type === "user" && typeof event.source.userId === "string" && event.source.userId.length > 0 && event.source.userId.length <= 256,
     "LINE_USER_REQUIRED",
   );
   const code = event.message?.text?.trim().toUpperCase();
   ensure(/^MEOS-[A-HJ-NP-Z2-9]{12}$/.test(code), "LINE_CODE_INVALID");
-  const hash = await sha256(code),
-    now = ctx.now();
-  const result = await ctx.db.batch([
-    ctx.db
-      .prepare(
-        "UPDATE stores SET pending_line_user_id=?,updated_at=? WHERE state='line_pending' AND id IN (SELECT store_id FROM line_links WHERE code_hash=? AND expires_at>? AND consumed_at IS NULL)",
-      )
-      .bind(event.source.userId, now, hash, now),
-    ctx.db
-      .prepare(
-        "UPDATE line_links SET consumed_at=? WHERE code_hash=? AND expires_at>? AND consumed_at IS NULL RETURNING store_id",
-      )
-      .bind(now, hash, now),
+  const hash = await sha256(code), now = ctx.now();
+  const automatic = readSelfConfig(ctx.env).autoLinePin;
+  if (automatic) ensure(event.type === "message" && event.message?.type === "text", "LINE_CODE_INVALID");
+  const liveSession = automatic
+    ? " AND EXISTS(SELECT 1 FROM sessions b WHERE b.token_hash=l.session_hash AND b.owner_sub=s.owner_sub AND b.expires_at>?)"
+    : "";
+  const snapshot = await ctx.db.prepare(`SELECT l.*,s.owner_sub,s.generation FROM line_links l JOIN stores s ON s.id=l.store_id
+    WHERE l.code_hash=? AND l.expires_at>? AND l.consumed_at IS NULL AND s.state='line_pending'${liveSession}`)
+    .bind(hash,now,...(automatic?[now]:[])).first();
+  ensure(snapshot,"LINE_CODE_INVALID");
+  const result=await ctx.db.batch([
+    ctx.db.prepare("UPDATE stores SET pending_line_user_id=?,updated_at=? WHERE id=? AND state='line_pending' AND generation=? AND EXISTS(SELECT 1 FROM line_links WHERE store_id=? AND code_hash=? AND expires_at>? AND consumed_at IS NULL)")
+      .bind(event.source.userId,now,snapshot.store_id,snapshot.generation,snapshot.store_id,hash,now),
+    ctx.db.prepare("UPDATE line_links SET consumed_at=? WHERE code_hash=? AND expires_at>? AND consumed_at IS NULL AND EXISTS(SELECT 1 FROM stores WHERE id=? AND generation=? AND state='line_pending' AND pending_line_user_id=?)")
+      .bind(now,hash,now,snapshot.store_id,snapshot.generation,event.source.userId),
   ]);
-  ensure(
-    result[0].meta.changes === 1 && result[1].results.length === 1,
-    "LINE_CODE_INVALID",
-  );
-  return { ok: true };
+  ensure(result.every(r=>r.meta.changes===1),"LINE_CODE_INVALID");
+  if(automatic) {
+    try {
+      const store=await getStore(ctx,snapshot.store_id);
+      ensure(store?.generation===snapshot.generation && store.pendingLineUserId===event.source.userId,"STORE_CHANGED",409);
+      await deliverLineCheck(ctx,{store,sessionHash:snapshot.session_hash,automatic:true});
+    } catch(error) {
+      // Link consumption remains valid. Read-only status and explicit browser
+      // recovery handle quota holds, failures, unknown sends and interruptions.
+      return {ok:true,checkCode:error instanceof SelfError?error.code:"LINE_RESULT_UNKNOWN"};
+    }
+  }
+  return {ok:true};
 }
 export async function sendLineCheck(ctx, actor) {
-  ensure(!readSelfConfig(ctx.env).pilotMode, "PROCESSING_CLOSED", 503);
-  const s = await requireStore(ctx, actor);
-  ensure(
-    s.state === "line_pending" && s.pendingLineUserId,
-    "LINE_PENDING_REQUIRED",
-    409,
-  );
-  const link = await ctx.db
-    .prepare("SELECT session_hash FROM line_links WHERE store_id=?")
-    .bind(s.id)
-    .first();
-  ensure(
-    link?.session_hash === actor.sessionHash,
-    "LINE_BROWSER_MISMATCH",
-    403,
-  );
-  await consumeRate(ctx, {
-    bucket: "test-minute:" + s.id,
-    limit: 1,
-    windowMs: 60000,
-  });
-  await consumeRate(ctx, {
-    bucket: "test-day:" + s.id + ":" + dateKeys(ctx.now()).day,
-    limit: 3,
-    windowMs: 86400000,
-  });
-  const { reservePush, sendReservedPush } = await import("./budget.mjs");
-  const id = "line-test:" + crypto.randomUUID();
-  const reservation = await reservePush(ctx, { id, storeId: s.id });
-  ensure(reservation.ok, "QUOTA_EXHAUSTED", 429);
-  let n;
-  do {
-    n = crypto.getRandomValues(new Uint32Array(1))[0];
-  } while (n >= 4294000000);
-  const pin = String(n % 1000000).padStart(6, "0");
-  await ctx.db
-    .prepare("INSERT OR REPLACE INTO line_checks VALUES (?,?,?,?,0,?)")
-    .bind(
-      s.id,
-      await hmac(pin, ctx.env.SELF_RATE_KEY + ":" + s.id),
-      s.generation,
-      actor.sessionHash,
-      ctx.now() + LIMITS.pinMs,
-    )
-    .run();
-  const current = await requireStore(ctx, actor);
-  ensure(
-    current.generation === s.generation && current.state === "line_pending",
-    "STORE_CHANGED",
-    409,
-  );
-  await sendReservedPush(ctx, {
-    id,
-    to: s.pendingLineUserId,
-    messages: [
-      {
-        type: "text",
-        text: `MEO Harness 確認番号: ${pin}\n5分以内に登録画面へ入力してください。`,
-      },
-    ],
-    retryKey: crypto.randomUUID(),
-  });
-  return { ok: true, expiresAt: ctx.now() + LIMITS.pinMs };
+  ensure(!readSelfConfig(ctx.env).pilotMode,"PROCESSING_CLOSED",503);
+  const store=await requireStore(ctx,actor);
+  ensure(store.state==="line_pending" && store.pendingLineUserId,"LINE_PENDING_REQUIRED",409);
+  return deliverLineCheck(ctx,{store,sessionHash:actor.sessionHash});
 }
 export async function verifyLinePin(ctx, actor, pin) {
   ensure(!readSelfConfig(ctx.env).pilotMode, "PROCESSING_CLOSED", 503);
