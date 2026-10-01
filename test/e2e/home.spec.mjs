@@ -176,6 +176,6 @@ test('home CTA reaches the registration screen using only a local challenge fixt
   await page.goto(app.baseURL + '/');
   await page.locator('.hero a[href="/start"]').click();
   await expect(page).toHaveURL(app.baseURL + '/start');
-  await expect(page.getByRole('button', { name: 'Googleで接続', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '初めての方：Googleでお店を接続', exact: true })).toBeVisible();
   expect(requests.some(request => /\/api\/self\/(?:google|line)/.test(request.path))).toBe(false);
 });

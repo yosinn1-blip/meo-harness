@@ -365,9 +365,6 @@ a {
     margin: 0 0 12px;
     line-height: 1.5;
   }
-  .intro h1 br {
-    display: none;
-  }
   .intro > p:not(.assurance) {
     font-size: 13px;
   }
@@ -418,4 +415,17 @@ a {
   .brand {
     font-size: 21px;
   }
+}
+
+/* Keep the next setup action distinct from secondary recovery controls. */
+.next-action {
+  border-left: 3px solid var(--blue);
+  padding: 10px 0 10px 16px;
+  font-weight: 600;
+  line-height: 1.8;
+}
+.setup-recovery {
+  border-top: 1px solid var(--line);
+  margin-top: 28px;
+  padding-top: 12px;
 }

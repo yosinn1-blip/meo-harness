@@ -53,7 +53,7 @@ async function sendPin(page) {
 }
 async function connect(page) {
   await page.goto(app.baseURL + "/start");
-  await page.getByRole("button", { name: "Googleで接続", exact: true }).click();
+  await page.getByRole("button", { name: "初めての方：Googleでお店を接続", exact: true }).click();
   await page.getByRole("button", { name: "架空Googleで許可" }).click();
 }
 async function onboard(page) {
@@ -106,7 +106,7 @@ test("PC initial registration, empty reviews, pause/resume and disconnect withou
   await page.getByRole("button", { name: "接続を切断" }).click();
   await page.getByRole("button", { name: "切断してデータを削除" }).click();
   await expect(
-    page.getByRole("button", { name: "Googleで接続", exact: true }),
+    page.getByRole("button", { name: "初めての方：Googleでお店を接続", exact: true }),
   ).toBeVisible();
   expect(admin).toEqual([]);
   expect(app.writes).toEqual([]);
@@ -123,7 +123,7 @@ test("public policies are readable before login on mobile and return to registra
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: "output/self-service/mobile-terms.png", fullPage: true });
   await page.getByRole("link", { name: "登録画面へ", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Googleで接続", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "初めての方：Googleでお店を接続", exact: true })).toBeVisible();
   expect(app.writes).toEqual([]);
 });
 test("mobile registration survives refresh, never overflows and keyboard focus is visible", async ({
@@ -162,7 +162,7 @@ test("denied Google authorization returns without secrets in URL", async ({
   page,
 }) => {
   await page.goto(app.baseURL + "/start");
-  await page.getByRole("button", { name: "Googleで接続", exact: true }).click();
+  await page.getByRole("button", { name: "初めての方：Googleでお店を接続", exact: true }).click();
   await page.getByRole("button", { name: "許可しない", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("権限が許可されません");
   expect(page.url()).toBe(app.baseURL + "/account");
@@ -173,7 +173,7 @@ test("expired Turnstile tokens disable Google connection until a fresh check", a
     body: `window.turnstile={render:(el,o)=>{const b=document.createElement('button');b.textContent='Expire fixture challenge';b.onclick=()=>o['expired-callback']();el.append(b);o.callback('fixture-challenge');return 'fixture-widget';}};`,
   }));
   await page.goto(app.baseURL + "/start");
-  const connectButton = page.getByRole("button", { name: "Googleで接続", exact: true });
+  const connectButton = page.getByRole("button", { name: "初めての方：Googleでお店を接続", exact: true });
   await expect(connectButton).toBeEnabled();
   await page.getByRole("button", { name: "Expire fixture challenge" }).click();
   await expect(connectButton).toBeDisabled();
@@ -190,7 +190,7 @@ test("failed Google start resets the used Turnstile token before retry", async (
     return route.continue();
   });
   await page.goto(app.baseURL + "/start");
-  const connectButton = page.getByRole("button", { name: "Googleで接続", exact: true });
+  const connectButton = page.getByRole("button", { name: "初めての方：Googleでお店を接続", exact: true });
   await connectButton.click();
   await expect(page.getByRole("alert")).toContainText("本人確認をもう一度");
   await connectButton.click();
@@ -207,7 +207,7 @@ test("challenge refresh during a pending request cannot enable retry before rese
     await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ ok: false, code: "CHALLENGE_FAILED" }) });
   });
   await page.goto(app.baseURL + "/start");
-  const connectButton = page.getByRole("button", { name: "Googleで接続", exact: true });
+  const connectButton = page.getByRole("button", { name: "初めての方：Googleでお店を接続", exact: true });
   await connectButton.click();
   await expect(page.getByRole("alert")).toContainText("本人確認をもう一度");
   await expect(connectButton).toBeDisabled();
@@ -223,7 +223,7 @@ test("closed intake keeps login and stop available", async ({ page }) => {
     page.getByRole("heading", { name: "新規受付はお休み中です" }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "Googleでログイン", exact: true })
+    .getByRole("button", { name: "登録済みの方：Googleでログイン", exact: true })
     .click();
   await page.getByRole("button", { name: "架空Googleで許可" }).click();
   await expect(
@@ -378,7 +378,7 @@ test("unfinished Google connection exposes disconnect before store selection", a
   await page.getByRole("button", { name: "接続を切断" }).click();
   await page.getByRole("button", { name: "切断してデータを削除" }).click();
   await expect(
-    page.getByRole("button", { name: "Googleで接続", exact: true }),
+    page.getByRole("button", { name: "初めての方：Googleでお店を接続", exact: true }),
   ).toBeVisible();
 });
 
@@ -403,8 +403,8 @@ test("wrong-language draft stays in processing backlog with no approval or Googl
 test("owner-only pilot login, Google connect and selection stops without LINE setup", async ({page}) => {
   await fixture(page, "scenario", {pilot:true});
   await page.goto(app.baseURL + "/start");
-  await expect(page.getByRole("button", {name:"Googleで接続",exact:true})).toHaveCount(0);
-  await page.getByRole("button", {name:"Googleでログイン",exact:true}).click();
+  await expect(page.getByRole("button", {name:"初めての方：Googleでお店を接続",exact:true})).toHaveCount(0);
+  await page.getByRole("button", {name:"登録済みの方：Googleでログイン",exact:true}).click();
   await page.getByRole("button", {name:"架空Googleで許可"}).click();
   await expect(page.getByText("本人限定・1店舗の接続テストです。",{exact:false})).toBeVisible();
   await page.getByRole("button", {name:"Googleでお店を接続",exact:true}).click();
@@ -425,9 +425,111 @@ test("owner-only pilot login, Google connect and selection stops without LINE se
 test("pilot login from another account never offers reconnect or lists locations", async ({page}) => {
   await fixture(page,"scenario",{pilot:true,pilotOwner:"not-alice"});
   await page.goto(app.baseURL+"/start");
-  await page.getByRole("button",{name:"Googleでログイン",exact:true}).click();
+  await page.getByRole("button",{name:"登録済みの方：Googleでログイン",exact:true}).click();
   await page.getByRole("button",{name:"架空Googleで許可"}).click();
   await expect(page.getByRole("heading",{name:"新規受付はお休み中です",exact:true})).toBeVisible();
   await expect(page.getByRole("button",{name:/接続|この店舗/})).toHaveCount(1); // Existing disconnect safety action only.
   await expect(page.getByRole("button",{name:/Googleで.*接続|この店舗を使う/})).toHaveCount(0);
+});
+
+test("first-time and registered entry choose their respective Google permission intents", async ({ page }) => {
+  await page.goto(app.baseURL + "/start");
+  const first = page.getByRole("button", { name: "初めての方：Googleでお店を接続", exact: true });
+  const existing = page.getByRole("button", { name: "登録済みの方：Googleでログイン", exact: true });
+  await expect(first).toBeEnabled();
+  await expect(existing).toBeEnabled();
+  await page.screenshot({ path: "output/self-service/onboarding-desktop-start.png", fullPage: true });
+  const [connectRequest] = await Promise.all([
+    page.waitForRequest(r => r.url().endsWith("/api/self/google/start")),
+    first.click(),
+  ]);
+  expect(connectRequest.postDataJSON().intent).toBe("connect");
+  await expect(page.getByRole("heading", { name: "架空Google認可画面" })).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("scope")).toContain("business.manage");
+  await page.getByRole("button", { name: "許可しない", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("権限が許可されません");
+  await expect(existing).toBeEnabled();
+  const [loginRequest] = await Promise.all([
+    page.waitForRequest(r => r.url().endsWith("/api/self/google/start")),
+    existing.click(),
+  ]);
+  expect(loginRequest.postDataJSON().intent).toBe("login");
+  await expect(page.getByRole("heading", { name: "架空Google認可画面" })).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("scope")).toBe("openid");
+  expect(app.pushes).toEqual([]);
+  expect(app.writes).toEqual([]);
+});
+
+test("LINE confirmation survives browser back and reload without automatic or duplicate PIN sends", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto(app.baseURL + "/start");
+  await expect(page.getByRole("button", { name: "初めての方：Googleでお店を接続" })).toBeEnabled();
+  await page.screenshot({ path: "output/self-service/onboarding-mobile-start.png", fullPage: true });
+  await connect(page);
+  await page.getByRole("button", { name: "この店舗を使う" }).click();
+  const code = await page.getByTestId("line-code").textContent();
+  await page.screenshot({ path: "output/self-service/onboarding-mobile-code.png", fullPage: true });
+  // Leave for a same-origin page, then resume the same browser session.
+  await page.goto(app.baseURL + "/self/help/quickstart");
+  await fixture(page, "line", { code, userId: "line-fixture" });
+  await page.goBack();
+  const send = page.getByRole("button", { name: "確認番号をLINEに送る", exact: true });
+  await expect(send).toBeVisible();
+  expect(app.pushes).toEqual([]);
+  await page.screenshot({ path: "output/self-service/onboarding-mobile-detected.png", fullPage: true });
+  let sends = 0;
+  page.on("request", r => { if (r.url().endsWith("/api/self/line/test")) sends++; });
+  let release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  await page.route("**/api/self/line/test", async route => { await blocked; await route.continue(); });
+  await send.evaluate(b => { b.click(); b.click(); });
+  await expect(send).toBeDisabled();
+  release();
+  await expect(page.getByText("LINEに確認番号を送りました", { exact: false })).toBeVisible();
+  expect(sends).toBe(1);
+  expect(app.pushes).toHaveLength(1);
+  await page.screenshot({ path: "output/self-service/onboarding-mobile-pin-sent.png", fullPage: true });
+  const pin = (await (await fixture(page, "pin")).json()).pin;
+  await page.reload();
+  await expect(page.getByLabel("確認番号", { exact: true })).toBeVisible();
+  expect(sends).toBe(1);
+  expect(app.pushes).toHaveLength(1);
+  await page.getByLabel("確認番号", { exact: true }).fill(pin);
+  await page.getByRole("button", { name: "確認する", exact: true }).click();
+  await expect(page.getByRole("button", { name: "利用を開始する" })).toBeVisible();
+  await page.getByRole("button", { name: "利用を開始する" }).click();
+  await expect(page.getByRole("heading", { name: "準備ができました" })).toBeVisible();
+  await expect(page.getByLabel("利用条件を確認しました")).toBeFocused();
+  await page.screenshot({ path: "output/self-service/onboarding-mobile-ready.png", fullPage: true });
+  expect(app.writes).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test("LINE recovery reissues a code and requires confirmation of the new notification owner", async ({ page }) => {
+  await connect(page);
+  await page.getByRole("button", { name: "この店舗を使う" }).click();
+  const originalCode = await page.getByTestId("line-code").textContent();
+  await fixture(page, "line", { code: originalCode, userId: "line-fixture" });
+  await page.getByRole("button", { name: "LINEの検出状態を更新" }).click();
+  await sendPin(page);
+  const oldPin = (await (await fixture(page, "pin")).json()).pin;
+  await page.getByText("通知先のLINEを変更する・登録コードを送り直す", { exact: true }).click();
+  await page.getByRole("button", { name: "コードを再発行", exact: true }).click();
+  const newCode = await page.getByTestId("line-code").textContent();
+  expect(newCode).not.toBe(originalCode);
+  expect(app.pushes).toHaveLength(1);
+  await fixture(page, "line", { code: newCode, userId: "line-other" });
+  await page.getByRole("button", { name: "LINEの検出状態を更新" }).click();
+  await page.getByLabel("確認番号", { exact: true }).fill(oldPin);
+  await page.getByRole("button", { name: "確認する", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("確認番号が違うか");
+  await expect(page.getByRole("button", { name: "利用を開始する" })).toHaveCount(0);
+  await fixture(page, "advance", { ms: 60001 });
+  await sendPin(page);
+  const newPin = (await (await fixture(page, "pin")).json()).pin;
+  await page.getByLabel("確認番号", { exact: true }).fill(newPin);
+  await page.getByRole("button", { name: "確認する", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "準備ができました" })).toBeVisible();
+  expect(app.pushes.map(push => push.to)).toEqual(["line-fixture", "line-other"]);
+  expect(app.writes).toEqual([]);
 });

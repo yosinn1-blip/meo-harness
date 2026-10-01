@@ -295,9 +295,14 @@ async function render() {
     text(
       "Googleアカウントのパスワードを、この画面やAIのチャットに入力する必要はありません。",
     );
-    if (state.registrationOpen)
-      root.append(oauthButton("Googleで接続", "connect"));
-    root.append(oauthButton("Googleでログイン", "login", "secondary"));
+    if (state.registrationOpen) {
+      root.append(node("h3", "初めて登録する方"));
+      text("次に：お店を管理しているGoogleアカウントを選び、Googleの画面で権限を確認してください。", "next-action");
+      root.append(oauthButton("初めての方：Googleでお店を接続", "connect"));
+    }
+    root.append(node("h3", "登録済み・設定の続きを進める方"));
+    text("接続したGoogleアカウントでログインすると、設定の続きや停止・再開の画面へ進めます。", "small");
+    root.append(oauthButton("登録済みの方：Googleでログイン", "login", "secondary"));
     await loadChallenge();
   } else if (
     (!state.store && !state.registrationAllowed) ||
@@ -320,7 +325,8 @@ async function render() {
   } else if (state.state === "google_connected") {
     heading("あなたのお店を選んでください");
     if (state.pilotMode) text("本人限定・1店舗の接続テストです。AI生成・LINE送信・口コミ公開は停止中です。");
-    text("このGoogleアカウントで管理できる店舗だけを表示します。");
+    text("次に：返信案を受け取りたいお店の名前を確認し、「この店舗を使う」を押してください。", "next-action");
+    text("このGoogleアカウントで管理できる店舗だけを表示します。1つのGoogleアカウントで登録できるのは1店舗です。", "small");
     const list = node("div");
     list.id = "locations";
     root.append(list);
@@ -328,32 +334,44 @@ async function render() {
   } else if (["location_selected", "line_pending"].includes(state.state)) {
     heading("いつものLINEを通知先に");
     text(state.store.title);
-    if (lineCode) {
-      root.append(link("LINEで友だち追加", state.lineFriendUrl));
-      const qr = node("img", undefined, "qr");
-      qr.src = "/self/assets/line-qr.svg";
-      qr.alt = "LINE友だち追加のQRコード";
-      root.append(qr);
-      const c = node("output", lineCode, "code");
-      c.dataset.testid = "line-code";
+    if (!state.lineDetected) {
+      text("次に：登録コードをLINEへ送ります。送った後は、設定を始めたこのブラウザの登録画面へ戻ってください。", "next-action");
+      if (lineCode) {
+        root.append(node("h3", "1. 登録コードをコピー"));
+        const c = node("output", lineCode, "code");
+        c.dataset.testid = "line-code";
+        root.append(
+          c,
+          button("登録コードをコピー", () => navigator.clipboard.writeText(lineCode)),
+        );
+        text("このコードの有効期限は15分です。", "small");
+        root.append(node("h3", "2. LINEでコードを送信"));
+        root.append(link("LINEで友だち追加", state.lineFriendUrl));
+        text("MEO Harnessを友だち追加し、トークに登録コードを貼り付けて送ってください。");
+        const qrHelp = node("details");
+        qrHelp.append(node("summary", "別の端末でLINEを開く方：QRコードを表示"));
+        const qr = node("img", undefined, "qr");
+        qr.src = "/self/assets/line-qr.svg";
+        qr.alt = "LINE友だち追加のQRコード";
+        qrHelp.append(qr);
+        root.append(qrHelp);
+        root.append(node("h3", "3. この登録画面へ戻る"));
+        text("LINEの中で新しく開いた画面ではなく、設定を始めたブラウザへ戻ってください。LINEを検出すると、確認番号を送るボタンが表示されます。");
+        root.append(button("コードを再発行", code, "secondary"));
+      } else {
+        text("登録コードが表示されていない場合は、下のボタンでコードを表示してLINEへ送ってください。");
+        root.append(button("LINEの登録コードを表示", code));
+      }
       root.append(
-        c,
-        button(
-          "登録コードをコピー",
-          () => navigator.clipboard.writeText(lineCode),
-          "secondary",
-        ),
+        button("LINEの検出状態を更新", () => refresh(true), "secondary"),
       );
-      text(
-        "このコードをLINEボットへ送ってください。有効期限は15分です。",
-        "small",
-      );
+      text("通常は自動で検出します。画面が変わらないときだけ、検出状態を更新してください。", "small");
     } else {
-      root.append(button("LINEの登録コードを表示", code));
-    }
-    root.append(button("コードを再発行", code, "secondary"));
-    if (state.lineDetected) {
       text("LINEを検出しました。届いた番号で通知先を確認します。", "success");
+      text(
+        "次に：番号が届いていない場合は「確認番号をLINEに送る」を押してください。届いた6桁は、設定を始めたこのブラウザへ戻って入力し、「確認する」を押します。",
+        "next-action",
+      );
       root.append(
         button("確認番号をLINEに送る", async () => {
           pinSent = false;
@@ -364,6 +382,7 @@ async function render() {
       );
       if (pinSent)
         text("LINEに確認番号を送りました。届いた6桁を入力してください。", "success");
+      text("すでに番号が届いている場合は、送り直さずに入力できます。", "small");
       const label = node("label", "確認番号");
       label.htmlFor = "pin";
       const pin = node("input");
@@ -378,12 +397,17 @@ async function render() {
         button("確認する", () => mutate("line/verify", { pin: pin.value })),
       );
       text("番号は5分間有効です。テスト送信は1分に1回、1日3回まで。", "small");
-    } else
-      root.append(
-        button("LINEの検出状態を更新", () => refresh(true), "secondary"),
+      const retry = node("details", undefined, "setup-recovery");
+      retry.append(
+        node("summary", "通知先のLINEを変更する・登録コードを送り直す"),
+        node("p", "下のボタンで新しい登録コードを表示し、通知先にしたいLINEから送ってください。その後、このブラウザへ戻って確認番号で確認します。", "small"),
+        button("コードを再発行", code, "secondary"),
       );
+      root.append(retry);
+    }
   } else if (["line_verified", "ready"].includes(state.state)) {
     heading("準備ができました");
+    text("次に：利用条件とプライバシーを確認し、チェックを入れて「利用を開始する」を押してください。", "next-action");
     text(state.store.title + " ／ LINE確認済み");
     text(
       "直近60日の未返信口コミから、最初は5件まで返信案を作ります。通知は原則1日1回。ここで利用開始しても、返信はまだ公開されません。",
