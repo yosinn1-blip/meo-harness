@@ -75,6 +75,7 @@ export async function startTestApp() {
     registration: true,
     autoPin: false,
     buttonConfirm: false,
+    autoButton: false,
     lineFailure: null,
     reviews: [],
     quota: 200,
@@ -199,9 +200,9 @@ export async function startTestApp() {
             if(card?.type!=="flex")throw Error("fixture button card missing");
             const action=card.contents.footer.contents[0].action.data;
             const uri=card.contents.footer.contents[1].action.uri;
-            response=new Response(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>架空LINE確認カード</title><style>body{font:18px/1.7 sans-serif;margin:24px;color:#111}button,a{display:block;font:inherit;padding:14px;margin:16px 0;text-align:center;border:1px solid #333;background:#fff;color:#111;text-decoration:none;box-sizing:border-box;width:100%}</style><h1>架空LINE確認カード</h1><p>実LINEには接続しない試験用画面です。</p><p>ご自身で始めた登録だけ確認し、心当たりがなければ押さないでください。</p><button id="confirm">このLINEで確認</button><a id="return" href="${uri}">登録を続ける</a><p>5分以内に元ブラウザで通知先を確定します。</p><output id="fixture-result"></output><script>document.querySelector('#confirm').onclick=async()=>{const r=await fetch('/fixture/postback',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:${JSON.stringify(action)},userId:new URLSearchParams(location.search).get('user')||'line-fixture'})});document.querySelector('#fixture-result').textContent=r.ok?'架空署名イベントを処理しました':'架空処理失敗';};</script></html>`,{headers:{"Content-Type":"text/html; charset=utf-8"}});
+            response=new Response(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>架空LINE確認カード</title><style>body{font:18px/1.7 sans-serif;margin:24px;color:#111}button,a{display:block;font:inherit;padding:14px;margin:16px 0;text-align:center;border:1px solid #333;background:#fff;color:#111;text-decoration:none;box-sizing:border-box;width:100%}</style><h1>架空LINE確認カード</h1><p>実LINEには接続しない試験用画面です。</p><p>ご自身で始めた登録だけ確認し、心当たりがなければ押さないでください。</p><button id="confirm">${card.contents.footer.contents[0].action.label}</button><a id="return" href="${uri}">${card.contents.footer.contents[1].action.label}</a><p>${card.contents.footer.contents[2].text}</p><output id="fixture-result"></output><script>document.querySelector('#confirm').onclick=async()=>{const r=await fetch('/fixture/postback',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:${JSON.stringify(action)},userId:new URLSearchParams(location.search).get('user')||'line-fixture'})});document.querySelector('#fixture-result').textContent=r.ok?'架空署名イベントを処理しました':'架空処理失敗';};</script></html>`,{headers:{"Content-Type":"text/html; charset=utf-8"}});
           } else if (url.pathname === "/fixture/line-chat") {
-            response = new Response(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>架空LINE・ローカル検証専用</title><style>body{font:18px sans-serif;margin:24px;color:#111}input,button{font:inherit;padding:12px;max-width:100%;box-sizing:border-box}output{display:block;font-size:28px;margin-top:24px}p{line-height:1.7}</style><h1>架空LINE画面</h1><p>ローカル検証専用。実際のLINEへ接続・送信していません。</p><label for="code">登録コード</label><input id="code"><button id="send">LINEへコード送信（架空）</button><output id="received" aria-live="polite"></output><script>document.querySelector('#send').onclick=async()=>{const r=await fetch('/fixture/line',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:document.querySelector('#code').value,userId:'line-fixture'})});const p=await(await fetch('/fixture/pin')).json();document.querySelector('#received').textContent=r.ok&&p.pin?'確認番号: '+p.pin:'送信結果を登録画面で確認してください';};</script></html>`, {headers:{"Content-Type":"text/html; charset=utf-8"}});
+            response = new Response(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>架空LINE・ローカル検証専用</title><style>body{font:18px sans-serif;margin:24px;color:#111}input,button{font:inherit;padding:12px;max-width:100%;box-sizing:border-box}output{display:block;font-size:28px;margin-top:24px}p{line-height:1.7}</style><h1>架空LINE画面</h1><p>ローカル検証専用。実際のLINEへ接続・送信していません。</p><label for="code">登録コード</label><input id="code"><button id="send">LINEへコード送信（架空）</button><output id="received" aria-live="polite"></output><script>document.querySelector('#send').onclick=async()=>{const r=await fetch('/fixture/line',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:document.querySelector('#code').value,userId:'line-fixture'})});const p=await(await fetch('/fixture/pin')).json();if(r.ok&&p.method==='button'){location.href='/fixture/line-card';return;}document.querySelector('#received').textContent=r.ok&&p.pin?'確認番号: '+p.pin:'送信結果を登録画面で確認してください';};</script></html>`, {headers:{"Content-Type":"text/html; charset=utf-8"}});
           } else if (url.pathname === "/fixture/authorize") {
             const original = new URL(
               "https://accounts.google.com/o/oauth2/v2/auth",
@@ -261,13 +262,14 @@ export async function startTestApp() {
               await Promise.all(pending);
             } finally { Date.now = savedNow; }
           } else if (url.pathname === "/fixture/pin")
-            response = Response.json({ pin: lastPin });
+            response = Response.json({ pin: lastPin, method: pushes.at(-1)?.messages[0]?.type === "flex" ? "button" : null });
           else if (url.pathname === "/fixture/scenario") {
             Object.assign(settings, data);
             if (data.pilot) Object.assign(env, await pilotSettings(data.pilotOwner ?? "alice"));
             env.SELF_REGISTRATION_ENABLED = String(settings.pilot ? false : settings.registration);
             env.SELF_LINE_AUTO_PIN_ENABLED = String(settings.autoPin);
             env.SELF_LINE_BUTTON_CONFIRM_ENABLED = String(settings.buttonConfirm);
+            env.SELF_LINE_AUTO_BUTTON_ENABLED = String(settings.autoButton);
             if (data.lineFriendUrl !== undefined)
               env.SELF_LINE_FRIEND_URL = data.lineFriendUrl;
             if (data.drafts !== undefined)

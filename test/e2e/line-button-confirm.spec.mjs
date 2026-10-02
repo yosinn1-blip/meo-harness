@@ -86,11 +86,11 @@ test('return after missing link remains private and read-only; normal original s
 test('separate LINE session confirms; wrong return stays generic; original owner and terms stay explicit',async({page,browser})=>{
  await ready(page);expect(app.pushes).toHaveLength(0);await send(page);await expect(page.getByLabel('確認番号',{exact:true})).toHaveCount(0);
  await screens(page,'waiting');const line=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:375,height:812}});extraContexts.push(line);await configure(line);
- const lp=await line.newPage();await lp.goto(app.baseURL+'/fixture/line-card');await lp.getByRole('button',{name:'このLINEで確認',exact:true}).click();
+ const lp=await line.newPage();await lp.goto(app.baseURL+'/fixture/line-card');await lp.getByRole('button',{name:'1 このLINEで確認',exact:true}).click();
  await expect(lp.getByText('架空署名イベントを処理しました',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'通知先を確認して次へ',exact:true})).toBeVisible();
  expect((await app.db.prepare('SELECT state FROM stores').first()).state).toBe('line_pending');
- const before=await snapshot();await lp.getByRole('link',{name:'登録を続ける',exact:true}).click();
+ const before=await snapshot();await lp.getByRole('link',{name:'2 登録画面へ戻る',exact:true}).click();
  await expect(lp.getByRole('heading',{name:'登録を始めた画面へ戻ってください',exact:true})).toBeVisible();
  await lp.reload();await expect(lp.getByRole('heading',{name:'登録を始めた画面へ戻ってください',exact:true})).toBeVisible();
  expect(await snapshot()).toBe(before);expect(await line.cookies()).toHaveLength(0);

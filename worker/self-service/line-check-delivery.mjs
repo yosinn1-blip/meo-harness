@@ -2,6 +2,7 @@ import { ensure, SelfError } from "./errors.mjs";
 import { consumeRate } from "./abuse.mjs";
 import { LIMITS, dateKeys } from "./contracts.mjs";
 import { hmac } from "./crypto.mjs";
+import { readSelfConfig } from "./config.mjs";
 import { reservePush, sendReservedPush, settleUsage } from "./budget.mjs";
 import { DELIVERY_ELIGIBLE as eligible, deliveryIdentity as identity, newButtonChallenge, buttonMessage,
   BUTTON_PURPOSE, readButtonCheck, requireButtonMode } from "./line-button-confirm.mjs";
@@ -10,7 +11,12 @@ const LEASE_MS = 90000;
 export async function deliverLineCheck(ctx, { store, sessionHash, automatic = false, method = "pin" }) {
   ensure(["pin","button"].includes(method),"LINE_CONFIRMATION_INVALID");
   const button = method === "button";
-  if (button) { requireButtonMode(ctx); ensure(!automatic,"LINE_BUTTON_DISABLED",409); }
+  function checkButtonMode() {
+    if (!button) return;
+    requireButtonMode(ctx);
+    ensure(!automatic || readSelfConfig(ctx.env).autoLineButton,"LINE_BUTTON_DISABLED",409);
+  }
+  checkButtonMode();
   const link = await ctx.db.prepare("SELECT session_hash FROM line_links WHERE store_id=?").bind(store.id).first();
   ensure(link?.session_hash === sessionHash, "LINE_BROWSER_MISMATCH", 403);
   const attemptId = crypto.randomUUID(), id = "line-test:" + attemptId;
@@ -24,6 +30,7 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
     lease_until=excluded.lease_until,updated_at=excluded.updated_at
     WHERE ?=0 AND (line_check_deliveries.state NOT IN ('preparing','sending') OR line_check_deliveries.lease_until<=?)`)
     .bind(store.id,store.generation,sessionHash,attemptId,n+LEASE_MS,n,...identity(store,sessionHash,n),automatic?1:0,n);
+  checkButtonMode();
   let claim;
   if (button) {
     try {
@@ -61,7 +68,7 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
   let reserved = false, dispatched = false;
   try {
     ensure(!deadline?.aborted,"LINE_RETRY_REQUIRED",429);
-    if (button) requireButtonMode(ctx);
+    checkButtonMode();
     await consumeRate(ctx,{bucket:"test-minute:"+store.id,limit:1,windowMs:60000});
     await consumeRate(ctx,{bucket:"test-day:"+store.id+":"+dateKeys(ctx.now()).day,limit:3,windowMs:86400000});
     const reservation = await reservePush(io,{id,storeId:store.id});
@@ -99,7 +106,7 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
         ...(button?[store.id,attemptId,challenge.hash,ctx.now()]:[store.id,pinHash,store.generation,sessionHash,ctx.now()])).run();
     ensure(gate.meta.changes===1,"STORE_CHANGED",409);
     ensure(!deadline?.aborted,"LINE_RETRY_REQUIRED",429);
-    if (button) requireButtonMode(ctx);
+    checkButtonMode();
     dispatched = true;
     await sendReservedPush(io,{id,to:store.pendingLineUserId,messages:[button?buttonMessage(ctx,store,challenge.nonce):{type:"text",text:`MEO Harness 確認番号: ${pin}\n5分以内に、登録を始めたブラウザの画面へ戻って入力してください。`}],retryKey:attemptId});
     await finish("sent");
@@ -116,7 +123,7 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
 // Read-only browser projection. The PIN, hashes and LINE destination stay private.
 export async function readLineCheckStatus(ctx, store, sessionHash) {
   if (store.state !== "line_pending" || !store.pendingLineUserId) return null;
-  const link=await ctx.db.prepare("SELECT session_hash FROM line_links WHERE store_id=?").bind(store.id).first();
+  const link=await ctx.db.prepare("SELECT session_hash,consumed_at FROM line_links WHERE store_id=?").bind(store.id).first();
   if (!link)
     return {state:"link_missing",code:"LINE_LINK_MISSING",pinAvailable:false,expiresAt:null,retryAfterMs:0};
   if (link?.session_hash !== sessionHash)
@@ -129,10 +136,14 @@ export async function readLineCheckStatus(ctx, store, sessionHash) {
     .bind("test-minute:"+store.id,"test-day:"+store.id+":"+dateKeys(ctx.now()).day,ctx.now()).first();
   const pending=delivery && ["preparing","sending"].includes(delivery.state);
   const interrupted=pending && delivery.lease_until<=ctx.now();
+  // A lost waitUntil task must become explicit recovery, never perpetual waiting.
+  const autoStarting = !delivery && readSelfConfig(ctx.env).autoLineButton && link.consumed_at !== null;
+  const startUntil = autoStarting ? link.consumed_at + 20000 : 0;
+  const awaiting = autoStarting && startUntil > ctx.now();
   const buttonCheck=await readButtonCheck(ctx,store,sessionHash,delivery);
-  return {state:interrupted?"uncertain":delivery?.state??"idle",
-    code:interrupted?"LINE_RESULT_UNKNOWN":delivery?.error_code??null,
+  return {state:interrupted?"uncertain":delivery?.state??(awaiting?"awaiting":autoStarting?"held":"idle"),
+    code:interrupted?"LINE_RESULT_UNKNOWN":delivery?.error_code??(autoStarting&&!awaiting?"LINE_RETRY_REQUIRED":null),
     pinAvailable:Boolean(pin),expiresAt:pin?.expires_at??null,
-    retryAfterMs:Math.max(0,(rate?.retry_at??0)-ctx.now(),pending&&!interrupted?delivery.lease_until-ctx.now():0),
+    retryAfterMs:Math.max(0,(rate?.retry_at??0)-ctx.now(),pending&&!interrupted?delivery.lease_until-ctx.now():0,awaiting?startUntil-ctx.now():0),
     ...(buttonCheck??{})};
 }

@@ -38,3 +38,28 @@ test("LINE button is default OFF, strict manual-only opt-in, and closed in pilot
     assert.equal(readSelfConfig({...enabled,...override}).lineButtonConfirm,false);
   assert.equal(readSelfConfig({...enabled,SELF_LINE_AUTO_PIN_ENABLED:"true"}).autoLinePin,true);
 });
+test("explicit auto-button opt-in has a fixed eight-way compatibility matrix", () => {
+  // Raw autoPIN, button feature, new autoButton => effective PIN, button, autoButton.
+  const cases = [
+    [false,false,false,false,false,false], [false,false,true,false,false,false],
+    [false,true,false,false,true,false], [false,true,true,false,true,true],
+    [true,false,false,true,false,false], [true,false,true,true,false,false],
+    [true,true,false,true,false,false], [true,true,true,false,true,true],
+  ];
+  for (const [pin,button,auto,wantPin,wantButton,wantAuto] of cases) {
+    const c=readSelfConfig(fixtureEnv({}, {SELF_LINE_AUTO_PIN_ENABLED:String(pin),
+      SELF_LINE_BUTTON_CONFIRM_ENABLED:String(button),SELF_LINE_AUTO_BUTTON_ENABLED:String(auto)}));
+    assert.deepEqual([c.autoLinePin,c.lineButtonConfirm,c.autoLineButton],[wantPin,wantButton,wantAuto]);
+  }
+});
+test("auto-button fails closed for malformed flags, pilot, processing OFF and incomplete config", () => {
+  const env=fixtureEnv({}, {SELF_LINE_AUTO_PIN_ENABLED:"true",SELF_LINE_BUTTON_CONFIRM_ENABLED:"true",SELF_LINE_AUTO_BUTTON_ENABLED:"true"});
+  for(const value of [undefined,"false","","TRUE",true]) {
+    const c=readSelfConfig({...env,SELF_LINE_AUTO_BUTTON_ENABLED:value});
+    assert.deepEqual([c.autoLinePin,c.lineButtonConfirm,c.autoLineButton],[true,false,false]);
+  }
+  for(const override of [{SELF_PROCESSING_ENABLED:"false"},{SELF_PILOT_OWNER_SHA256:""},{LINE_CHANNEL_SECRET:""}]) {
+    const c=readSelfConfig({...env,...override});
+    assert.deepEqual([c.autoLinePin,c.lineButtonConfirm,c.autoLineButton],[false,false,false]);
+  }
+});

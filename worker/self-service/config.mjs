@@ -60,16 +60,19 @@ export function readSelfConfig(env) {
       env.SELF_LINE_FRIEND_URL &&
       env.SELF_TERMS_VERSION,
   );
+  const autoLineButton = !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true" &&
+    env.SELF_LINE_BUTTON_CONFIRM_ENABLED === "true" && env.SELF_LINE_AUTO_BUTTON_ENABLED === "true";
   return {
     origin,
     configured,
     registrationEnabled,
     pilotMode,
     pilotEnabled,
-    autoLinePin: !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true" && env.SELF_LINE_AUTO_PIN_ENABLED === "true",
-    // Manual button confirmation never replaces the separately gated auto-PIN flow.
+    // The new explicit auto-button opt-in wins; otherwise preserve legacy flags.
+    autoLinePin: !autoLineButton && !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true" && env.SELF_LINE_AUTO_PIN_ENABLED === "true",
+    autoLineButton,
     lineButtonConfirm: !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true" &&
-      env.SELF_LINE_BUTTON_CONFIRM_ENABLED === "true" && env.SELF_LINE_AUTO_PIN_ENABLED !== "true",
+      env.SELF_LINE_BUTTON_CONFIRM_ENABLED === "true" && (autoLineButton || env.SELF_LINE_AUTO_PIN_ENABLED !== "true"),
     processingEnabled: !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true",
     limits,
   };

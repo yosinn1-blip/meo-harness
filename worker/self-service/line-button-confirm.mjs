@@ -36,9 +36,9 @@ export function buttonMessage(ctx, store, nonce) {
       { type: "text", text: store.title.slice(0,300), wrap: true },
       { type: "text", text: "ご自身で始めたMEO Harnessの登録だけ確認してください。心当たりがなければ押さないでください。", wrap: true },
     ]}, footer: { type: "box", layout: "vertical", contents: [
-      { type: "button", action: { type: "postback", label: "このLINEで確認", data: "meo-confirm:v1:" + nonce } },
-      { type: "button", action: { type: "uri", label: "登録を続ける", uri } },
-      { type: "text", text: "先に確認を押し、登録を続けるで元のブラウザへ。5分以内に、元の登録画面で通知先を確定してください。", size: "sm", wrap: true },
+      { type: "button", action: { type: "postback", label: "1 このLINEで確認", data: "meo-confirm:v1:" + nonce } },
+      { type: "button", action: { type: "uri", label: "2 登録画面へ戻る", uri } },
+      { type: "text", text: "1で確認してから、2で元のブラウザへ戻ります。戻る操作だけでは確認は完了しません。5分以内に、元の画面で「通知先を確認して次へ」を押してください。", size: "sm", wrap: true },
     ]},
   }};
 }
@@ -101,5 +101,5 @@ export async function readButtonCheck(ctx, store, sessionHash, delivery) {
   // Keep the method marker until its parent link/session is purged. An expired
   // button must not silently become PIN mode. Holds/rejections have no usable card.
   return { method:"button", buttonAvailable:Boolean(live && record.received_at !== null),
-    expiresAt:live ? record.expires_at : null };
+    expiresAt:live ? record.expires_at : null, buttonExpired:record.expires_at<=ctx.now() };
 }

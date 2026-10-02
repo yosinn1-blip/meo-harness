@@ -137,7 +137,7 @@ function liveLineCode() {
   return typeof lineCode === "string" && /^MEOS-[A-HJ-NP-Z2-9]{12}$/.test(lineCode) &&
     Number.isFinite(lineCodeExpiresAt) && lineCodeExpiresAt > Date.now();
 }
-function lineReturnHelp(after = "送ったら") {
+function lineReturnHelp(after = state.lineAutoButton ? "LINEの「1 このLINEで確認」を押したら" : "送ったら") {
   return node("p", after + "、スマホのアプリ切替で、この画面を開いているSafari・Chromeへ戻ってください。登録を始めたタブを選ぶと続きを進められます。", "small");
 }
 async function loadChallenge() {
@@ -317,19 +317,21 @@ function dangerConfirm(kind) {
   );
 }
 function renderButtonCheck(check) {
-  const pending=["preparing","sending"].includes(check.state);
+  const pending=["awaiting","preparing","sending"].includes(check.state);
   text("LINEを検出しました。番号を入力せず、LINEのボタンで通知先を確認できます。", "success");
   if (check.buttonAvailable) {
     text("LINEの確認操作を受け取りました。このお店の通知先として使うことを確認し、次へ進んでください。", "next-action");
     root.append(button("通知先を確認して次へ",()=>mutate("line/confirm",{confirmed:true})));
-  } else if (pending) text("確認メッセージの送信状況を確認しています。自動では再送しません。", "next-action");
+  } else if (pending) text("確認メッセージの送信状況を確認しています。届いたカードの「1 このLINEで確認」を押してください。自動では再送しません。", "next-action");
   else if (check.expiresAt) {
-    text("次に：LINEの「このLINEで確認」を押し、「登録を続ける」からこのブラウザへ戻ってください。", "next-action");
+    text("次に：LINEの「1 このLINEで確認」を押し、「2 登録画面へ戻る」からこのブラウザへ戻ってください。戻る操作だけでは確認は完了しません。", "next-action");
     if (lineChatUrl()) {
       const open=link("LINEで確認メッセージを開く",lineChatUrl());open.referrerPolicy="no-referrer";
-      root.append(open,lineReturnHelp("確認ボタンを押したら"));
+      root.append(open,node("p","このリンクでLINEのトークを開き、届いた確認カードを選んでください。","small"),lineReturnHelp("確認ボタンを押したら"));
     }
-  } else text("次に：「確認メッセージをLINEに送る」を押してください。番号の入力は不要です。", "next-action");
+  } else text(check.buttonExpired
+    ? "確認カードの5分間の期限が切れました。「確認メッセージをLINEに送る」を押して、新しいカードで確認してください。"
+    : "次に：「確認メッセージをLINEに送る」を押してください。番号の入力は不要です。", "next-action");
   if (check.code) text(check.code==="LINE_RESULT_UNKNOWN"
     ? "送信結果を確認できません。届いたボタンは期限内なら使えます。自動では再送しません。"
     : buttonMessages[check.code]??messages[check.code]??"送信を完了できませんでした。状態を更新してください。", "small");
@@ -427,7 +429,9 @@ async function render() {
     heading("いつものLINEを通知先に");
     text(state.store.title);
     if (!state.lineDetected) {
-      text(state.lineAutoPin
+      text(state.lineAutoButton
+        ? "次に：下のボタンでLINEを開き、送信ボタンを押します。そのまま届く確認カードの「1 このLINEで確認」を押し、「2 登録画面へ戻る」で戻ってください。"
+        : state.lineAutoPin
         ? "次に：下のボタンでLINEを開き、送信ボタンを押します。届く6桁を読んでから、この登録画面へ戻ってください。"
         : "次に：下のボタンでLINEを開き、送信ボタンを押します。その後、この登録画面へ戻ってください。", "next-action");
       if (lineCode && !liveLineCode()) {
@@ -449,12 +453,14 @@ async function render() {
           text("スマホのLINEでMEO Harness宛てにコードが入力されます。内容を確認し、LINEの送信ボタンを押してください。", "small");
         } else text("下の補助欄でコードをコピーし、MEO HarnessのLINEトークへ送ってください。");
         text("登録コードは15分間有効です。", "small");
-        root.append(node("h3", state.lineAutoPin ? "2. LINEの6桁を読んで、この画面へ戻る" : "2. この画面へ戻る"));
+        root.append(node("h3", state.lineAutoButton ? "2. LINEのカードで確認して戻る" : state.lineAutoPin ? "2. LINEの6桁を読んで、この画面へ戻る" : "2. この画面へ戻る"));
         root.append(lineReturnHelp());
-        text(state.lineAutoPin
+        text(state.lineAutoButton
+          ? "登録コードを送ると、確認カードを自動で1通送ります。1で確認してから2で元のブラウザへ戻り、「通知先を確認して次へ」を押してください。カードは5分間有効です。届かない・期限切れの場合は、この元画面で状況を確認して明示的に送り直せます。"
+          : state.lineAutoPin
           ? "LINEに届いた6桁をこの画面へ入力します。番号は5分間有効です。届かない場合も、この画面で送信状況を確認できます。"
           : state.lineButtonConfirm
-            ? "LINEを検出すると「確認メッセージをLINEに送る」が表示されます。送ったメッセージの「このLINEで確認」を押し、「登録を続ける」でこの元画面へ戻ります。"
+            ? "LINEを検出すると「確認メッセージをLINEに送る」が表示されます。送ったカードの「1 このLINEで確認」を押し、「2 登録画面へ戻る」でこの元画面へ戻ります。"
             : "LINEを検出すると「確認番号をLINEに送る」が表示されます。押した後、LINEで6桁を読み、この画面で入力します。");
         const help = node("details", undefined, "setup-recovery");
         help.open = !chat;
@@ -493,7 +499,9 @@ async function render() {
       const sameBrowser = !linkMissing && check.state !== "browser_mismatch";
       if (linkMissing) {
         text("LINEは検出していますが、通知先の確認をやり直す必要があります。", "success");
-        text("次に：「LINEの登録コードを再発行」を押し、表示された案内に沿ってLINEへ送ってください。この画面に戻ると、確認メッセージを送れるようになります。", "next-action");
+        text(state.lineAutoButton
+          ? "次に：「LINEの登録コードを再発行」を押し、LINEへ送ってください。そのまま新しいカードの「1 このLINEで確認」を押してから、「2 登録画面へ戻る」で戻ってください。"
+          : "次に：「LINEの登録コードを再発行」を押し、表示された案内に沿ってLINEへ送ってください。この画面に戻ると、確認メッセージを送れるようになります。", "next-action");
         root.append(button("LINEの登録コードを再発行", code));
       } else if (sameBrowser && state.lineButtonConfirm && check.method === "button") renderButtonCheck(check);
       else {

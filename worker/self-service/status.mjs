@@ -17,6 +17,7 @@ export async function getSelfStatus(ctx, request) {
     pilotMode: c.pilotMode,
     processingEnabled: c.processingEnabled,
     lineAutoPin: c.autoLinePin,
+    lineAutoButton: c.autoLineButton,
     lineButtonConfirm: c.lineButtonConfirm,
     limits: c.limits,
     termsVersion: ctx.env.SELF_TERMS_VERSION ?? null,

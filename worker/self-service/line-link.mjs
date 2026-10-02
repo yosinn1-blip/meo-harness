@@ -55,7 +55,9 @@ export async function consumeLineCode(ctx, event, { deferCheck } = {}) {
   const code = event.message?.text?.trim().toUpperCase();
   ensure(/^MEOS-[A-HJ-NP-Z2-9]{12}$/.test(code), "LINE_CODE_INVALID");
   const hash = await sha256(code), now = ctx.now();
-  const automatic = readSelfConfig(ctx.env).autoLinePin;
+  const config = readSelfConfig(ctx.env);
+  const automatic = config.autoLinePin || config.autoLineButton;
+  const method = config.autoLineButton ? "button" : "pin";
   if (automatic) ensure(event.type === "message" && event.message?.type === "text", "LINE_CODE_INVALID");
   const liveSession = automatic
     ? " AND EXISTS(SELECT 1 FROM sessions b WHERE b.token_hash=l.session_hash AND b.owner_sub=s.owner_sub AND b.expires_at>?)"
@@ -64,19 +66,39 @@ export async function consumeLineCode(ctx, event, { deferCheck } = {}) {
     WHERE l.code_hash=? AND l.expires_at>? AND l.consumed_at IS NULL AND s.state='line_pending'${liveSession}`)
     .bind(hash,now,...(automatic?[now]:[])).first();
   ensure(snapshot,"LINE_CODE_INVALID");
-  const result=await ctx.db.batch([
+  const consumedNow = ctx.now();
+  const updates = [
     ctx.db.prepare("UPDATE stores SET pending_line_user_id=?,updated_at=? WHERE id=? AND state='line_pending' AND generation=? AND EXISTS(SELECT 1 FROM line_links WHERE store_id=? AND code_hash=? AND expires_at>? AND consumed_at IS NULL)")
-      .bind(event.source.userId,now,snapshot.store_id,snapshot.generation,snapshot.store_id,hash,now),
+      .bind(event.source.userId,consumedNow,snapshot.store_id,snapshot.generation,snapshot.store_id,hash,consumedNow),
     ctx.db.prepare("UPDATE line_links SET consumed_at=? WHERE code_hash=? AND expires_at>? AND consumed_at IS NULL AND EXISTS(SELECT 1 FROM stores WHERE id=? AND generation=? AND state='line_pending' AND pending_line_user_id=?)")
-      .bind(now,hash,now,snapshot.store_id,snapshot.generation,event.source.userId),
-  ]);
+      .bind(consumedNow,hash,consumedNow,snapshot.store_id,snapshot.generation,event.source.userId),
+  ];
+  let result;
+  try {
+    result = await ctx.db.batch(automatic ? [
+      // Recheck the original live browser inside the atomic write. A logout,
+      // owner change or reissue after the snapshot must consume nothing.
+      ctx.db.prepare(`INSERT INTO mutation_guards SELECT EXISTS(
+        SELECT 1 FROM line_links l JOIN stores s ON s.id=l.store_id
+        JOIN sessions b ON b.token_hash=l.session_hash
+        WHERE l.code_hash=? AND l.store_id=? AND l.session_hash=?
+        AND l.expires_at>? AND l.consumed_at IS NULL AND s.state='line_pending'
+        AND s.owner_sub=? AND s.generation=? AND b.owner_sub=s.owner_sub AND b.expires_at>?)`)
+        .bind(hash,snapshot.store_id,snapshot.session_hash,consumedNow,snapshot.owner_sub,snapshot.generation,consumedNow),
+      ...updates,
+      ctx.db.prepare("DELETE FROM mutation_guards"),
+    ] : updates);
+  } catch (error) {
+    if (/CHECK constraint failed/i.test(error.message)) throw new SelfError("LINE_CODE_INVALID",400);
+    throw error;
+  }
   ensure(result.every(r=>r.meta.changes===1),"LINE_CODE_INVALID");
   if(automatic) {
     const deliver = async () => {
       try {
         const store=await getStore(ctx,snapshot.store_id);
         ensure(store?.generation===snapshot.generation && store.pendingLineUserId===event.source.userId,"STORE_CHANGED",409);
-        await deliverLineCheck(ctx,{store,sessionHash:snapshot.session_hash,automatic:true});
+        await deliverLineCheck(ctx,{store,sessionHash:snapshot.session_hash,automatic:true,method});
         return {ok:true};
       } catch(error) {
         // Link consumption remains valid. Read-only status and explicit browser

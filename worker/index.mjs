@@ -419,7 +419,7 @@ async function handleLineBotWebhook(request, env, ctx) {
 async function processLineEvents(events, env) {
   const { parseLinkCode } = await import('../src/line-link.mjs');
   // waitUntil's allowance belongs to the request, not each event. Preserve
-  // ordered consumption/actions, then supervise bounded PIN delivery together.
+  // ordered consumption/actions, then supervise bounded confirmation delivery together.
   const lineCheckSignal = AbortSignal.timeout(20000), lineChecks = [];
   for (const event of events) {
     try {
