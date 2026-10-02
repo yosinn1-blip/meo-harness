@@ -328,6 +328,11 @@ function dangerConfirm(kind) {
     button("戻る", () => render(), "secondary"),
   );
 }
+function lineDailyLimitHint(check) {
+  return check?.dailySendLimit === null
+    ? "本人の試用中は1日の回数制限を解除しています。1分に1回・共有の送信枠内で利用できます。"
+    : null;
+}
 function lineLimitNotice(check) {
   if (check.sendLimit?.kind === "daily") {
     text("今日は確認メッセージの送信上限（3回）に達しました。", "next-action");
@@ -385,7 +390,8 @@ function renderButtonCheck(check) {
     try {await api("line/test",{});}catch(error){await refresh(true);throw error;}
     await refresh(true);
   },"secondary");lockLineSend(pin,check,pending);fallback.append(pin);root.append(fallback);
-  text("5分以内にLINEのボタンを押し、この元画面で通知先を確定してください。送信は1分に1回、1日3回まで。受付と実際の到着は別です。", "small");
+  text(lineDailyLimitHint(check) ?? "5分以内にLINEのボタンを押し、この元画面で通知先を確定してください。送信は1分に1回、1日3回まで。受付と実際の到着は別です。", "small");
+  if (lineDailyLimitHint(check)) text("5分以内にLINEのボタンを押し、この元画面で通知先を確定してください。受付と実際の到着は別です。", "small");
 }
 async function render() {
   progress();
@@ -588,7 +594,8 @@ async function render() {
         pin.maxLength = 6;
         root.append(label, pin, button("確認する", () => mutate("line/verify", { pin: pin.value })));
       }
-      text("番号は5分間有効です。送信は自動送信を含め1分に1回、1日3回まで。送信受付と実際の到着は別です。", "small");
+      text(lineDailyLimitHint(check) ?? "番号は5分間有効です。送信は自動送信を含め1分に1回、1日3回まで。送信受付と実際の到着は別です。", "small");
+      if (lineDailyLimitHint(check)) text("番号は5分間有効です。送信受付と実際の到着は別です。", "small");
       if (sameBrowser && state.lineButtonConfirm) {
         const switchButton=button("ボタン確認へ切り替えて送る",async()=>{
           try {await api("line/button",{});}catch(error){await refresh(true);throw error;}

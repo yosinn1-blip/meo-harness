@@ -1,12 +1,22 @@
 import { ensure, SelfError } from "./errors.mjs";
 import { consumeRate } from "./abuse.mjs";
 import { LIMITS, dateKeys } from "./contracts.mjs";
-import { hmac } from "./crypto.mjs";
+import { hmac, sha256, safeEqual } from "./crypto.mjs";
 import { readSelfConfig } from "./config.mjs";
 import { reservePush, sendReservedPush, settleUsage } from "./budget.mjs";
 import { DELIVERY_ELIGIBLE as eligible, deliveryIdentity as identity, newButtonChallenge, buttonMessage,
   BUTTON_PURPOSE, readButtonCheck, requireButtonMode } from "./line-button-confirm.mjs";
 const LEASE_MS = 90000;
+// Only a dedicated, explicit owner opt-in bypasses the daily bucket. The store
+// is the authenticated DB model; request body/query/header owner values are not used.
+async function dailyLineCheckLimit(ctx, store) {
+  const ownerHash = ctx.env.SELF_LINE_CHECK_DAILY_BYPASS_OWNER_SHA256;
+  if (ctx.env.SELF_LINE_CHECK_DAILY_BYPASS_ENABLED !== "true" ||
+      typeof ownerHash !== "string" || !/^[a-f0-9]{64}$/.test(ownerHash) ||
+      typeof store.ownerSub !== "string" || !store.ownerSub || readSelfConfig(ctx.env).pilotMode)
+    return 3;
+  return safeEqual(await sha256(store.ownerSub), ownerHash) ? null : 3;
+}
 // Only the signed webhook's consumed link or the authenticated browser may call this.
 export async function deliverLineCheck(ctx, { store, sessionHash, automatic = false, method = "pin" }) {
   ensure(["pin","button"].includes(method),"LINE_CONFIRMATION_INVALID");
@@ -70,7 +80,9 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
     ensure(!deadline?.aborted,"LINE_RETRY_REQUIRED",429);
     checkButtonMode();
     await consumeRate(ctx,{bucket:"test-minute:"+store.id,limit:1,windowMs:60000});
-    await consumeRate(ctx,{bucket:"test-day:"+store.id+":"+dateKeys(ctx.now()).day,limit:3,windowMs:86400000});
+    const dailySendLimit = await dailyLineCheckLimit(ctx,store);
+    if (dailySendLimit !== null)
+      await consumeRate(ctx,{bucket:"test-day:"+store.id+":"+dateKeys(ctx.now()).day,limit:dailySendLimit,windowMs:86400000});
     const reservation = await reservePush(io,{id,storeId:store.id});
     ensure(reservation.ok,reservation.code,429); reserved = true;
     ensure(!deadline?.aborted,"LINE_RETRY_REQUIRED",429);
@@ -126,6 +138,7 @@ export async function readLineCheckStatus(ctx, store, sessionHash) {
   const link=await ctx.db.prepare("SELECT session_hash,consumed_at FROM line_links WHERE store_id=?").bind(store.id).first();
   if (link && link.session_hash !== sessionHash)
     return {state:"browser_mismatch",code:"LINE_BROWSER_MISMATCH",pinAvailable:false,expiresAt:null,retryAfterMs:0};
+  const dailySendLimit=await dailyLineCheckLimit(ctx,store);
   const n=ctx.now(),minuteBucket="test-minute:"+store.id,dayBucket="test-day:"+store.id+":"+dateKeys(n).day;
   const rate=await ctx.db.prepare(`SELECT
     MAX(CASE WHEN bucket=? THEN expires_at END) minute_at,
@@ -134,11 +147,17 @@ export async function readLineCheckStatus(ctx, store, sessionHash) {
     .bind(minuteBucket,dayBucket,minuteBucket,dayBucket,n).first();
   // The daily bucket changes at JST midnight even when its 24-hour row lives on.
   const tomorrowJST=(Math.floor((n+9*3600000)/86400000)+1)*86400000-9*3600000;
-  const dayUntil=rate.day_at?Math.min(rate.day_at,tomorrowJST):0;
+  const dayUntil=dailySendLimit!==null && rate.day_at?Math.min(rate.day_at,tomorrowJST):0;
   const rateWait=Math.max(0,(rate.minute_at??0)-n,dayUntil-n);
   const sendLimit=dayUntil?{kind:"daily",retryAt:dayUntil}
     :rate.minute_at?{kind:"minute",retryAt:rate.minute_at}:null;
-  const rateProjection=readSelfConfig(ctx.env).lineButtonConfirm?{sendLimit}:{};
+  // Keep legacy unset projections compatible. UI defaults missing dailySendLimit
+  // to three; only a verified, explicitly enabled owner ever receives null.
+  const rateProjection={
+    ...(readSelfConfig(ctx.env).lineButtonConfirm?{sendLimit}:{}),
+    ...(ctx.env.SELF_LINE_CHECK_DAILY_BYPASS_ENABLED!==undefined ||
+        ctx.env.SELF_LINE_CHECK_DAILY_BYPASS_OWNER_SHA256!==undefined?{dailySendLimit}:{}),
+  };
   if (!link)
     return {state:"link_missing",code:"LINE_LINK_MISSING",pinAvailable:false,expiresAt:null,retryAfterMs:rateWait,...rateProjection};
   const delivery=await ctx.db.prepare("SELECT attempt_id,state,error_code,lease_until FROM line_check_deliveries WHERE store_id=? AND generation=? AND session_hash=?")
