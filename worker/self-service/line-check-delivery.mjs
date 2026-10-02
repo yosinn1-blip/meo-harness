@@ -117,6 +117,8 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
 export async function readLineCheckStatus(ctx, store, sessionHash) {
   if (store.state !== "line_pending" || !store.pendingLineUserId) return null;
   const link=await ctx.db.prepare("SELECT session_hash FROM line_links WHERE store_id=?").bind(store.id).first();
+  if (!link)
+    return {state:"link_missing",code:"LINE_LINK_MISSING",pinAvailable:false,expiresAt:null,retryAfterMs:0};
   if (link?.session_hash !== sessionHash)
     return {state:"browser_mismatch",code:"LINE_BROWSER_MISMATCH",pinAvailable:false,expiresAt:null,retryAfterMs:0};
   const delivery=await ctx.db.prepare("SELECT attempt_id,state,error_code,lease_until FROM line_check_deliveries WHERE store_id=? AND generation=? AND session_hash=?")

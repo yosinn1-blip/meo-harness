@@ -36,6 +36,25 @@ async function setup(t,overrides={},schema={}) {
     status:async()=>readLineCheckStatus(ctx,await findOwnedStore(ctx,actor.sub),actor.sessionHash)};
 }
 const rows=async db=>JSON.stringify((await db.prepare("SELECT * FROM line_button_checks").all()).results);
+for (const buttonConfirm of [true,false]) test('missing link is distinct from another browser; status stays read-only, button mode '+buttonConfirm,async t=>{
+  const f=await setup(t,{SELF_LINE_BUTTON_CONFIRM_ENABLED:String(buttonConfirm)},buttonConfirm?{}:{through:4});
+  const store=await findOwnedStore(f.ctx,actor.sub);
+  const different=await readLineCheckStatus(f.ctx,store,'fixture-other-browser');
+  assert.equal(different.state,'browser_mismatch');assert.equal(different.code,'LINE_BROWSER_MISMATCH');
+  f.advance(900001);await purgeExpired(f.ctx);
+  const before=JSON.stringify(await findOwnedStore(f.ctx,actor.sub));
+  const state=await f.status();
+  assert.deepEqual(state,{state:'link_missing',code:'LINE_LINK_MISSING',pinAvailable:false,expiresAt:null,retryAfterMs:0});
+  assert.equal(JSON.stringify(await findOwnedStore(f.ctx,actor.sub)),before);
+  assert.equal((await f.db.prepare('SELECT count(*) n FROM line_links').first()).n,0);
+  await assert.rejects(()=>sendLineCheck(f.ctx,actor),e=>e.code==='LINE_BROWSER_MISMATCH');
+  if(buttonConfirm)await assert.rejects(()=>sendLineButton(f.ctx,actor),e=>e.code==='LINE_BROWSER_MISMATCH');
+  assert.equal(f.pushes.length,0);
+  const code=await issueLineCode(f.ctx,actor);
+  assert.equal((await findOwnedStore(f.ctx,actor.sub)).pendingLineUserId,null);
+  await consumeLineCode(f.ctx,{type:'message',source:{type:'user',userId:'line-a'},message:{type:'text',text:code.code}});
+  assert.equal((await f.status()).state,'idle');assert.equal(f.pushes.length,0);
+});
 test('button sends one Flex, no PIN/token leakage, receipt only, then original owner explicitly confirms',async t=>{
   const f=await setup(t);assert.equal(f.pushes.length,0);await sendLineButton(f.ctx,actor);
   assert.equal(f.pushes.length,1);const msg=f.pushes[0].messages[0];assert.equal(msg.type,'flex');

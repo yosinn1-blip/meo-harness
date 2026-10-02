@@ -489,8 +489,13 @@ async function render() {
     } else {
       const check = state.lineCheck ?? { state: "idle", pinAvailable: false };
       const pending = ["awaiting", "preparing", "sending"].includes(check.state);
-      const sameBrowser = check.state !== "browser_mismatch";
-      if (sameBrowser && state.lineButtonConfirm && check.method === "button") renderButtonCheck(check);
+      const linkMissing = check.state === "link_missing";
+      const sameBrowser = !linkMissing && check.state !== "browser_mismatch";
+      if (linkMissing) {
+        text("LINEは検出していますが、通知先の確認をやり直す必要があります。", "success");
+        text("次に：「LINEの登録コードを再発行」を押し、表示された案内に沿ってLINEへ送ってください。この画面に戻ると、確認メッセージを送れるようになります。", "next-action");
+        root.append(button("LINEの登録コードを再発行", code));
+      } else if (sameBrowser && state.lineButtonConfirm && check.method === "button") renderButtonCheck(check);
       else {
       text(state.lineButtonConfirm && !sameBrowser
         ? "LINEを検出しました。元の登録画面で通知先を確認してください。"
@@ -556,6 +561,7 @@ async function render() {
         root.append(change);
       }
       }
+      if (!linkMissing) {
       const retry = node("details", undefined, "setup-recovery");
       retry.append(
         node("summary", "通知先のLINEを変更する・登録コードを送り直す"),
@@ -563,6 +569,7 @@ async function render() {
         button("コードを再発行", code, "secondary"),
       );
       root.append(retry);
+      }
     }
   } else if (["line_verified", "ready"].includes(state.state)) {
     heading("準備ができました");

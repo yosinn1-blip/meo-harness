@@ -48,6 +48,41 @@ async function screens(page,stage){
   await page.screenshot({path:`output/self-service/button-${stage}-${name}.png`,fullPage:true});
  }await page.setViewportSize({width:375,height:812});
 }
+for(const buttonConfirm of [true,false]) test('original browser after link retention shows explicit recovery, no automatic send, button mode '+buttonConfirm,async({page})=>{
+ await fixture(page,'scenario',{buttonConfirm});await ready(page);
+ const sendName=buttonConfirm?'確認メッセージをLINEに送る':'確認番号をLINEに送る';
+ await expect(page.getByRole('button',{name:sendName,exact:true})).toBeVisible();
+ await fixture(page,'advance',{ms:900001});await purgeExpired(app.ctx);
+ const before=await snapshot();await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ await expect(page.getByRole('button',{name:'LINEの登録コードを再発行',exact:true})).toBeVisible();
+ await expect(page.getByText('LINEは検出していますが、通知先の確認をやり直す必要があります。',{exact:true})).toBeVisible();
+ await expect(page.getByText('設定を始めたブラウザへ戻ってください。そちらを使えない場合は、下の補助欄でコードを再発行し、LINEへ送り直してください。',{exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:sendName,exact:true})).toHaveCount(0);
+ await expect(page.getByLabel('確認番号',{exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'接続を切断',exact:true})).toBeVisible();
+ await page.reload();await expect(page.getByRole('button',{name:'LINEの登録コードを再発行',exact:true})).toBeVisible();
+ expect(await snapshot()).toBe(before);expect(app.pushes).toHaveLength(0);
+ if(buttonConfirm)await screens(page,'link-missing');
+ await page.getByRole('button',{name:'LINEの登録コードを再発行',exact:true}).click();
+ await expect(page.getByRole('link',{name:'LINEを開く（コード入力済み）',exact:true})).toBeVisible();
+ await expect(page.getByTestId('line-code')).toHaveText(/^MEOS-[A-HJ-NP-Z2-9]{12}$/);
+ const code=await page.getByTestId('line-code').textContent();await fixture(page,'line',{code,userId:'line-fixture'});
+ await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+ await expect(page.getByRole('button',{name:sendName,exact:true})).toBeVisible();expect(app.pushes).toHaveLength(0);
+});
+test('return after missing link remains private and read-only; normal original start offers recovery',async({page})=>{
+ await ready(page);await fixture(page,'advance',{ms:900001});await purgeExpired(app.ctx);
+ const before=await snapshot();await page.goto(app.baseURL+'/start?openExternalBrowser=1');
+ await expect(page.getByRole('heading',{name:'登録を始めた画面へ戻ってください',exact:true})).toBeVisible();
+ await expect(page.getByText('架空美容室',{exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'LINEの登録コードを再発行',exact:true})).toHaveCount(0);
+ const status=await (await page.request.get(app.baseURL+'/api/self/line/return-status')).json();
+ expect(status).toEqual({ok:true,state:'line_return_mismatch',csrf:null});
+ expect(await snapshot()).toBe(before);expect(app.pushes).toHaveLength(0);
+ await page.goto(app.baseURL+'/start');
+ await expect(page.getByRole('button',{name:'LINEの登録コードを再発行',exact:true})).toBeVisible();
+ expect(await snapshot()).toBe(before);expect(app.pushes).toHaveLength(0);
+});
 test('separate LINE session confirms; wrong return stays generic; original owner and terms stay explicit',async({page,browser})=>{
  await ready(page);expect(app.pushes).toHaveLength(0);await send(page);await expect(page.getByLabel('確認番号',{exact:true})).toHaveCount(0);
  await screens(page,'waiting');const line=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:375,height:812}});extraContexts.push(line);await configure(line);
