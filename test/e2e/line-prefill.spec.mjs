@@ -30,7 +30,7 @@ async function prepare(page){
   await page.getByRole('button',{name:'この店舗を使う',exact:true}).click();
   return page.getByTestId('line-code').textContent();
 }
-const prefill=page=>page.getByRole('link',{name:'LINEを開く（コード入力済み）',exact:true});
+const prefill=page=>page.getByRole('link',{name:'LINEを開いてコードを送る',exact:true});
 
 for(const automatic of [false,true])test(`prefilled LINE chat keeps the original browser and needs a human send (${automatic?'ON':'OFF'})`,async({page,context})=>{
   let activates=0;page.on('request',r=>{if(r.url().endsWith('/api/self/activate'))activates++;});

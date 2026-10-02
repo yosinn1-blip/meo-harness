@@ -520,11 +520,7 @@ async function render() {
     heading("いつものLINEを通知先に");
     text(state.store.title);
     if (!state.lineDetected) {
-      text(state.lineAutoButton
-        ? state.lineOneButton ? "次に：下のボタンでLINEを開き、送信ボタンを押します。届いたカードの「確認して登録画面へ進む」を押し、戻った画面で「通知先を確認して次へ」を押してください。" : "次に：下のボタンでLINEを開き、送信ボタンを押します。そのまま届く確認カードの「1 このLINEで確認」を押し、「2 登録画面へ戻る」で戻ってください。"
-        : state.lineAutoPin
-        ? "次に：下のボタンでLINEを開き、送信ボタンを押します。届く6桁を読んでから、この登録画面へ戻ってください。"
-        : "次に：下のボタンでLINEを開き、送信ボタンを押します。その後、この登録画面へ戻ってください。", "next-action");
+      text("LINEから登録コードをまだ受け取っていません。", "small");
       if (lineCode && !liveLineCode()) {
         text("登録コードの期限が切れました。再発行してからLINEへ送ってください。", "next-action");
         root.append(button("コードを再発行", code));
@@ -532,7 +528,8 @@ async function render() {
         const chat = lineChatUrl();
         root.append(node("h3", "1. LINEで送信する"));
         if (chat) {
-          const open = link("LINEを開く（コード入力済み）", chat + "/?" + encodeURIComponent(lineCode));
+          text("LINEが開いたら、入力欄の右側にある送信ボタン（矢印）を1回押してください。開いただけでは登録されません。", "next-action");
+          const open = link("LINEを開いてコードを送る", chat + "/?" + encodeURIComponent(lineCode));
           open.referrerPolicy = "no-referrer";
           open.onclick = (event) => {
             if (busy || !liveLineCode() || state.lineDetected || lineChatUrl() !== chat) {
@@ -541,10 +538,14 @@ async function render() {
             }
           };
           root.append(open);
-          text("スマホのLINEでMEO Harness宛てにコードが入力されます。内容を確認し、LINEの送信ボタンを押してください。", "small");
+          text("コードはLINEの入力欄に入ります。自動送信はされません。", "small");
         } else text("下の補助欄でコードをコピーし、MEO HarnessのLINEトークへ送ってください。");
         text("登録コードは15分間有効です。", "small");
         root.append(node("h3", state.lineAutoButton ? "2. LINEのカードで確認して戻る" : state.lineAutoPin ? "2. LINEの6桁を読んで、この画面へ戻る" : "2. この画面へ戻る"));
+        if (state.lineAutoButton) text(state.lineOneButton
+          ? "送信後はLINEのトークで確認カードが届くまで待ち、「確認して登録画面へ進む」を押してください。"
+          : "送信後はLINEのトークで確認カードが届くまで待ち、「1 このLINEで確認」→「2 登録画面へ戻る」の順に押してください。", "next-action");
+        else if (state.lineAutoPin) text("送信後はLINEに届く6桁の番号を読み、この登録画面へ戻ってください。", "next-action");
         root.append(lineReturnHelp());
         text(state.lineAutoButton
           ? state.lineOneButton ? "登録コードを送ると、1ボタンの確認カードを自動で1通送ります。「確認して登録画面へ進む」を押し、戻った画面で「通知先を確認して次へ」を押してください。カードは5分間有効です。リンクは他の人へ転送しないでください。" : "登録コードを送ると、確認カードを自動で1通送ります。1で確認してから2で元のブラウザへ戻り、「通知先を確認して次へ」を押してください。カードは5分間有効です。届かない・期限切れの場合は、この元画面で状況を確認して明示的に送り直せます。"

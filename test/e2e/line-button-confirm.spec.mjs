@@ -64,7 +64,7 @@ for(const buttonConfirm of [true,false]) test('original browser after link reten
  expect(await snapshot()).toBe(before);expect(app.pushes).toHaveLength(0);
  if(buttonConfirm)await screens(page,'link-missing');
  await page.getByRole('button',{name:'LINEの登録コードを再発行',exact:true}).click();
- await expect(page.getByRole('link',{name:'LINEを開く（コード入力済み）',exact:true})).toBeVisible();
+ await expect(page.getByRole('link',{name:'LINEを開いてコードを送る',exact:true})).toBeVisible();
  await expect(page.getByTestId('line-code')).toHaveText(/^MEOS-[A-HJ-NP-Z2-9]{12}$/);
  const code=await page.getByTestId('line-code').textContent();await fixture(page,'line',{code,userId:'line-fixture'});
  await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
