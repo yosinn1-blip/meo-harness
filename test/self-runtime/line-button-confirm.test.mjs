@@ -44,7 +44,7 @@ for (const buttonConfirm of [true,false]) test('missing link is distinct from an
   f.advance(900001);await purgeExpired(f.ctx);
   const before=JSON.stringify(await findOwnedStore(f.ctx,actor.sub));
   const state=await f.status();
-  assert.deepEqual(state,{state:'link_missing',code:'LINE_LINK_MISSING',pinAvailable:false,expiresAt:null,retryAfterMs:0});
+  assert.deepEqual(state,{state:'link_missing',code:'LINE_LINK_MISSING',pinAvailable:false,expiresAt:null,retryAfterMs:0,...(buttonConfirm?{sendLimit:null}:{})});
   assert.equal(JSON.stringify(await findOwnedStore(f.ctx,actor.sub)),before);
   assert.equal((await f.db.prepare('SELECT count(*) n FROM line_links').first()).n,0);
   await assert.rejects(()=>sendLineCheck(f.ctx,actor),e=>e.code==='LINE_BROWSER_MISMATCH');

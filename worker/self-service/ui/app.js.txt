@@ -192,6 +192,7 @@ async function google(intent) {
   }
 }
 async function refresh(force = false) {
+  const previous = state;
   state = await api(returningFromLine ? "line/return-status" : "status");
   if (state.lineDetected || !["location_selected", "line_pending"].includes(state.state)) {
     lineCode = null;
@@ -209,8 +210,19 @@ async function refresh(force = false) {
     ? {...state.lineCheck, retryAfterMs: 0} : state.lineCheck};
   const fingerprint = JSON.stringify(displayState) + lineCode + liveLineCode();
   if (!force && fingerprint === rendered) return;
+  // A rate limit becoming available must not erase a live PIN being entered.
+  // Preserve only this same store/challenge, never a resent or expired PIN.
+  const oldPin = document.querySelector("#pin");
+  const pinEntry = oldPin && state.lineCheck?.pinAvailable && previous?.lineCheck?.pinAvailable &&
+    previous.store?.id === state.store?.id && previous.lineCheck.expiresAt === state.lineCheck.expiresAt
+    ? {value:oldPin.value,focused:document.activeElement===oldPin,start:oldPin.selectionStart,end:oldPin.selectionEnd} : null;
   rendered = fingerprint;
   await render();
+  const currentPin = document.querySelector("#pin");
+  if (pinEntry && currentPin) {
+    currentPin.value = pinEntry.value;
+    if (pinEntry.focused) {currentPin.focus();currentPin.setSelectionRange(pinEntry.start,pinEntry.end);}
+  }
 }
 async function mutate(path, body = {}) {
   await api(path, body);
@@ -316,20 +328,39 @@ function dangerConfirm(kind) {
     button("戻る", () => render(), "secondary"),
   );
 }
+function lineLimitNotice(check) {
+  if (check.sendLimit?.kind === "daily") {
+    text("今日は確認メッセージの送信上限（3回）に達しました。", "next-action");
+    const retry = new Intl.DateTimeFormat("ja-JP", {timeZone:"Asia/Tokyo",month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).format(check.sendLimit.retryAt);
+    text("届いているカード・番号は期限内なら使えます。新しい送信は" + retry + "以降、この画面で状態を確認してください。Googleの再接続は不要です。", "small");
+  } else if (check.sendLimit?.kind === "minute") {
+    text("確認メッセージの再送は少し待ってください。", "small");
+  }
+}
+function lockLineSend(control, check, pending = false) {
+  const locked = pending || Boolean(check.sendLimit);
+  control.dataset.locked = String(locked);
+  control.disabled = busy || locked;
+  return control;
+}
 function renderButtonCheck(check) {
   const pending=["awaiting","preparing","sending"].includes(check.state);
-  text("LINEを検出しました。番号を入力せず、LINEのボタンで通知先を確認できます。", "success");
+  text("LINEは検出済みです。通知先の確認を続けてください。");
   if (check.buttonAvailable) {
     text("LINEの確認操作を受け取りました。このお店の通知先として使うことを確認し、次へ進んでください。", "next-action");
     root.append(button("通知先を確認して次へ",()=>mutate("line/confirm",{confirmed:true})));
   } else if (pending) text("確認メッセージの送信状況を確認しています。届いたカードの「1 このLINEで確認」を押してください。自動では再送しません。", "next-action");
   else if (check.expiresAt) {
+    text("LINEの確認ボタンはまだ受け取っていません。", "next-action");
     text("次に：LINEの「1 このLINEで確認」を押し、「2 登録画面へ戻る」からこのブラウザへ戻ってください。戻る操作だけでは確認は完了しません。", "next-action");
     if (lineChatUrl()) {
-      const open=link("LINEで確認メッセージを開く",lineChatUrl());open.referrerPolicy="no-referrer";
+      const open=link("LINEのカードで「1 このLINEで確認」を押す",lineChatUrl());open.referrerPolicy="no-referrer";
       root.append(open,node("p","このリンクでLINEのトークを開き、届いた確認カードを選んでください。","small"),lineReturnHelp("確認ボタンを押したら"));
     }
-  } else text(check.buttonExpired
+  } else if (check.sendLimit) text(check.buttonExpired
+    ? "確認カードの5分間の期限が切れました。"
+    : "現在、新しい確認メッセージは送れません。", "next-action");
+  else text(check.buttonExpired
     ? "確認カードの5分間の期限が切れました。「確認メッセージをLINEに送る」を押して、新しいカードで確認してください。"
     : "次に：「確認メッセージをLINEに送る」を押してください。番号の入力は不要です。", "next-action");
   if (check.code) text(check.code==="LINE_RESULT_UNKNOWN"
@@ -339,7 +370,7 @@ function renderButtonCheck(check) {
     try {await api("line/button",{});} catch(error){await refresh(true);throw error;}
     await refresh(true);
   },check.expiresAt||pending?"secondary":"");
-  send.dataset.locked=String(pending);send.disabled=busy||pending;
+  lockLineSend(send,check,pending);
   if (!check.expiresAt && !check.buttonAvailable) root.append(send);
   else {
     const again=node("details",undefined,"setup-recovery");
@@ -353,7 +384,7 @@ function renderButtonCheck(check) {
   const pin=button("番号で確認に切り替えて送る",async()=>{
     try {await api("line/test",{});}catch(error){await refresh(true);throw error;}
     await refresh(true);
-  },"secondary");pin.dataset.locked=String(pending);pin.disabled=busy||pending;fallback.append(pin);root.append(fallback);
+  },"secondary");lockLineSend(pin,check,pending);fallback.append(pin);root.append(fallback);
   text("5分以内にLINEのボタンを押し、この元画面で通知先を確定してください。送信は1分に1回、1日3回まで。受付と実際の到着は別です。", "small");
 }
 async function render() {
@@ -497,12 +528,13 @@ async function render() {
       const pending = ["awaiting", "preparing", "sending"].includes(check.state);
       const linkMissing = check.state === "link_missing";
       const sameBrowser = !linkMissing && check.state !== "browser_mismatch";
+      lineLimitNotice(check);
       if (linkMissing) {
         text("LINEは検出していますが、通知先の確認をやり直す必要があります。", "success");
-        text(state.lineAutoButton
+        if (!check.sendLimit) text(state.lineAutoButton
           ? "次に：「LINEの登録コードを再発行」を押し、LINEへ送ってください。そのまま新しいカードの「1 このLINEで確認」を押してから、「2 登録画面へ戻る」で戻ってください。"
           : "次に：「LINEの登録コードを再発行」を押し、表示された案内に沿ってLINEへ送ってください。この画面に戻ると、確認メッセージを送れるようになります。", "next-action");
-        root.append(button("LINEの登録コードを再発行", code));
+        root.append(lockLineSend(button("LINEの登録コードを再発行", code),check));
       } else if (sameBrowser && state.lineButtonConfirm && check.method === "button") renderButtonCheck(check);
       else {
       text(state.lineButtonConfirm && !sameBrowser
@@ -514,7 +546,7 @@ async function render() {
         text("確認番号の送信状況を確認しています。届いた番号は、状況の更新後にこの画面へ入力できます。", "next-action");
       } else if (check.pinAvailable) {
         text("次に：LINEに届いている6桁を入力し、「確認する」を押してください。", "next-action");
-      } else {
+      } else if (!check.sendLimit) {
         text(check.state === "sent"
           ? "確認番号の期限が切れたか、照合の上限に達しました。新しい番号を送って確認してください。"
           : "次に：「確認番号をLINEに送る」を押してください。LINEで届いた6桁を読み、このブラウザへ戻って入力します。", "next-action");
@@ -537,8 +569,7 @@ async function render() {
           catch (error) { await refresh(true); throw error; }
           await refresh(true);
         }, check.pinAvailable || pending ? "secondary" : "");
-        send.dataset.locked = String(pending);
-        send.disabled = busy || pending;
+        lockLineSend(send,check,pending);
         if (state.lineAutoPin && (check.pinAvailable || pending)) {
           const resend = node("details", undefined, "setup-recovery");
           resend.append(node("summary", "確認番号が届かない・期限が切れたとき"),
@@ -546,7 +577,7 @@ async function render() {
           root.append(resend);
         } else root.append(send);
       }
-      if (sameBrowser && !pending && (check.pinAvailable || !state.lineAutoPin)) {
+      if (sameBrowser && !pending && (check.pinAvailable || (!state.lineAutoPin && !state.lineButtonConfirm))) {
         const label = node("label", "確認番号");
         label.htmlFor = "pin";
         const pin = node("input");
@@ -562,7 +593,7 @@ async function render() {
         const switchButton=button("ボタン確認へ切り替えて送る",async()=>{
           try {await api("line/button",{});}catch(error){await refresh(true);throw error;}
           await refresh(true);
-        },"secondary");switchButton.dataset.locked=String(pending);switchButton.disabled=busy||pending;
+        },"secondary");lockLineSend(switchButton,check,pending);
         const change=node("details",undefined,"setup-recovery");
         change.append(node("summary","番号を入力せずボタンで確認する"),
           node("p","切り替えると前の番号は無効になり、新しい送信を利用枠と回数に数えます。","small"),switchButton);
@@ -574,7 +605,7 @@ async function render() {
       retry.append(
         node("summary", "通知先のLINEを変更する・登録コードを送り直す"),
         node("p", "下のボタンで新しい登録コードを表示し、通知先にしたいLINEから送ってください。その後、この元ブラウザへ戻って通知先を確認します。", "small"),
-        button("コードを再発行", code, "secondary"),
+        lockLineSend(button("コードを再発行", code, "secondary"),check),
       );
       root.append(retry);
       }
@@ -734,9 +765,9 @@ window.addEventListener("pageshow", (event) => {
 });
 setInterval(() => {
   if (!busy && state?.state === "line_pending" &&
-      (!state.lineDetected || ["awaiting", "preparing", "sending"].includes(state.lineCheck?.state) ||
+      (!state.lineDetected || state.lineCheck?.sendLimit || ["awaiting", "preparing", "sending"].includes(state.lineCheck?.state) ||
        (state.lineButtonConfirm && state.lineCheck?.method === "button") ||
-       (state.lineAutoPin && state.lineCheck?.pinAvailable &&
+       ((state.lineAutoPin || state.lineButtonConfirm) && state.lineCheck?.pinAvailable &&
         Number.isFinite(state.lineCheck.expiresAt) && state.lineCheck.expiresAt <= Date.now())))
     // Recheck availability at expiry; the server remains the PIN authority.
     refresh().catch(showError);

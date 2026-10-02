@@ -124,16 +124,27 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
 export async function readLineCheckStatus(ctx, store, sessionHash) {
   if (store.state !== "line_pending" || !store.pendingLineUserId) return null;
   const link=await ctx.db.prepare("SELECT session_hash,consumed_at FROM line_links WHERE store_id=?").bind(store.id).first();
-  if (!link)
-    return {state:"link_missing",code:"LINE_LINK_MISSING",pinAvailable:false,expiresAt:null,retryAfterMs:0};
-  if (link?.session_hash !== sessionHash)
+  if (link && link.session_hash !== sessionHash)
     return {state:"browser_mismatch",code:"LINE_BROWSER_MISMATCH",pinAvailable:false,expiresAt:null,retryAfterMs:0};
+  const n=ctx.now(),minuteBucket="test-minute:"+store.id,dayBucket="test-day:"+store.id+":"+dateKeys(n).day;
+  const rate=await ctx.db.prepare(`SELECT
+    MAX(CASE WHEN bucket=? THEN expires_at END) minute_at,
+    MAX(CASE WHEN bucket=? THEN expires_at END) day_at
+    FROM rate_limits WHERE (bucket=? AND used>=1 OR bucket=? AND used>=3) AND expires_at>?`)
+    .bind(minuteBucket,dayBucket,minuteBucket,dayBucket,n).first();
+  // The daily bucket changes at JST midnight even when its 24-hour row lives on.
+  const tomorrowJST=(Math.floor((n+9*3600000)/86400000)+1)*86400000-9*3600000;
+  const dayUntil=rate.day_at?Math.min(rate.day_at,tomorrowJST):0;
+  const rateWait=Math.max(0,(rate.minute_at??0)-n,dayUntil-n);
+  const sendLimit=dayUntil?{kind:"daily",retryAt:dayUntil}
+    :rate.minute_at?{kind:"minute",retryAt:rate.minute_at}:null;
+  const rateProjection=readSelfConfig(ctx.env).lineButtonConfirm?{sendLimit}:{};
+  if (!link)
+    return {state:"link_missing",code:"LINE_LINK_MISSING",pinAvailable:false,expiresAt:null,retryAfterMs:rateWait,...rateProjection};
   const delivery=await ctx.db.prepare("SELECT attempt_id,state,error_code,lease_until FROM line_check_deliveries WHERE store_id=? AND generation=? AND session_hash=?")
     .bind(store.id,store.generation,sessionHash).first();
   const pin=await ctx.db.prepare("SELECT expires_at FROM line_checks WHERE store_id=? AND generation=? AND session_hash=? AND expires_at>? AND attempts<5")
     .bind(store.id,store.generation,sessionHash,ctx.now()).first();
-  const rate=await ctx.db.prepare("SELECT MAX(expires_at) retry_at FROM rate_limits WHERE (bucket=? AND used>=1 OR bucket=? AND used>=3) AND expires_at>?")
-    .bind("test-minute:"+store.id,"test-day:"+store.id+":"+dateKeys(ctx.now()).day,ctx.now()).first();
   const pending=delivery && ["preparing","sending"].includes(delivery.state);
   const interrupted=pending && delivery.lease_until<=ctx.now();
   // A lost waitUntil task must become explicit recovery, never perpetual waiting.
@@ -144,6 +155,7 @@ export async function readLineCheckStatus(ctx, store, sessionHash) {
   return {state:interrupted?"uncertain":delivery?.state??(awaiting?"awaiting":autoStarting?"held":"idle"),
     code:interrupted?"LINE_RESULT_UNKNOWN":delivery?.error_code??(autoStarting&&!awaiting?"LINE_RETRY_REQUIRED":null),
     pinAvailable:Boolean(pin),expiresAt:pin?.expires_at??null,
-    retryAfterMs:Math.max(0,(rate?.retry_at??0)-ctx.now(),pending&&!interrupted?delivery.lease_until-ctx.now():0,awaiting?startUntil-ctx.now():0),
+    retryAfterMs:Math.max(rateWait,pending&&!interrupted?delivery.lease_until-ctx.now():0,awaiting?startUntil-ctx.now():0),
+    ...rateProjection,
     ...(buttonCheck??{})};
 }

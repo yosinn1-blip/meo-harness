@@ -27,22 +27,23 @@ async function codeReady(page){
  return page.getByTestId('line-code').textContent();
 }
 async function accept(page){const code=await codeReady(page);await fixture(page,'line',{code,userId:'line-fixture'});await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
- await expect(page.getByRole('link',{name:'LINEで確認メッセージを開く',exact:true})).toBeVisible();expect(app.pushes).toHaveLength(1);expect(app.pushes[0].messages[0].type).toBe('flex');}
+ await expect(page.getByRole('link',{name:'LINEのカードで「1 このLINEで確認」を押す',exact:true})).toBeVisible();expect(app.pushes).toHaveLength(1);expect(app.pushes[0].messages[0].type).toBe('flex');}
 const card=()=>app.pushes.at(-1).messages[0];
 const action=()=>card().contents.footer.contents[0].action.data;
 async function snapshot(){const tables=(await app.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name").all()).results;return JSON.stringify(await Promise.all(tables.map(async({name})=>[name,(await app.db.prepare('SELECT * FROM "'+name+'"').all()).results])));}
-async function screens(page,stage){for(const [width,name] of [[320,'320'],[375,'375'],[1280,'1280']]){await page.setViewportSize({width,height:812});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:`../output/meo-line-auto-button-20261002/auto-${stage}-${name}.png`,fullPage:true});}await page.setViewportSize({width:375,height:812});}
+const pictureRoot=process.env.MEO_RECOVERY_OUTPUT??'../output/meo-line-auto-button-20261002';
+async function screens(page,stage){await expect(page.getByRole('button',{name:'状態を更新',exact:true})).toBeVisible();for(const [width,name] of [[320,'320'],[375,'375'],[1280,'1280']]){await page.setViewportSize({width,height:812});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:`${pictureRoot}/auto-${stage}-${name}.png`,fullPage:true});}await page.setViewportSize({width:375,height:812});}
 test('one LINE visit: code send presents card; return alone does nothing; ordered receipt still requires owner finalization and terms',async({page,browser})=>{
  const code=await codeReady(page);await screens(page,'code');
  const line=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:375,height:812}});extraContexts.push(line);await configure(line);
  const lp=await line.newPage();await lp.goto(app.baseURL+'/fixture/line-chat');await lp.getByLabel('登録コード',{exact:true}).fill(code);
  await lp.getByRole('button',{name:'LINEへコード送信（架空）',exact:true}).click();
  await expect(lp.getByRole('button',{name:'1 このLINEで確認',exact:true})).toBeVisible();expect(app.pushes).toHaveLength(1);
- await lp.screenshot({path:'../output/meo-line-auto-button-20261002/auto-fixture-card-375.png',fullPage:true});
+ await lp.screenshot({path:pictureRoot+'/auto-fixture-card-375.png',fullPage:true});
  const uri=card().contents.footer.contents[1].action.uri;
  let automaticConfirm=0;page.on('request',r=>{if(r.method()==='POST'&&/\/api\/self\/(line\/confirm|activate)$/.test(new URL(r.url()).pathname))automaticConfirm++;});
  const before=await snapshot();await page.goto(uri);
- await expect(page.getByRole('link',{name:'LINEで確認メッセージを開く',exact:true})).toBeVisible();
+ await expect(page.getByRole('link',{name:'LINEのカードで「1 このLINEで確認」を押す',exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'通知先を確認して次へ',exact:true})).toHaveCount(0);
  await expect(page.getByLabel('確認番号',{exact:true})).toHaveCount(0);
  await page.reload();expect(await snapshot()).toBe(before);expect(app.pushes).toHaveLength(1);expect(automaticConfirm).toBe(0);await screens(page,'premature-return');
@@ -78,6 +79,8 @@ test('missing automatic claim is bounded read-only awaiting then explicit recove
  await expect(page.getByRole('button',{name:'確認メッセージをLINEに送る',exact:true})).toBeDisabled();await screens(page,'awaiting');
  await page.reload();await expect(page.getByRole('button',{name:'確認メッセージをLINEに送る',exact:true})).toBeDisabled();expect(await snapshot()).toBe(before);
  await fixture(page,'advance',{ms:20001});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ await expect(page.getByRole('button',{name:'確認メッセージをLINEに送る',exact:true})).toBeDisabled();
+ await fixture(page,'advance',{ms:40000});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
  await expect(page.getByRole('button',{name:'確認メッセージをLINEに送る',exact:true})).toBeEnabled();expect(await snapshot()).toBe(before);expect(app.pushes).toHaveLength(1);
 });
 for(const scenario of [{name:'quota-full',settings:{quota:0},pushes:0},{name:'provider-rejected',settings:{lineFailure:'failed'},pushes:1}])
@@ -90,7 +93,7 @@ for(const scenario of [{name:'quota-full',settings:{quota:0},pushes:0},{name:'pr
 test('unknown automatic delivery retains card and reservation, allows actual receipt, never repeats automatically',async({page})=>{
  await fixture(page,'scenario',{lineFailure:'unknown'});await accept(page);
  await expect(page.getByText('送信結果を確認できません。届いたボタンは期限内なら使えます。自動では再送しません。',{exact:true})).toBeVisible();
- const before=await snapshot();await page.reload();await expect(page.getByRole('link',{name:'LINEで確認メッセージを開く',exact:true})).toBeVisible();expect(await snapshot()).toBe(before);expect(app.pushes).toHaveLength(1);
+ const before=await snapshot();await page.reload();await expect(page.getByRole('link',{name:'LINEのカードで「1 このLINEで確認」を押す',exact:true})).toBeVisible();expect(await snapshot()).toBe(before);expect(app.pushes).toHaveLength(1);
  expect((await app.db.prepare("SELECT count(*) n FROM usage_reservations WHERE state='uncertain' AND kind='push'").first()).n).toBe(1);
  await fixture(page,'postback',{action:action(),userId:'line-fixture'});await expect(page.getByRole('button',{name:'通知先を確認して次へ',exact:true})).toBeVisible();
  expect((await app.db.prepare('SELECT state FROM stores').first()).state).toBe('line_pending');

@@ -36,8 +36,9 @@ export function buttonMessage(ctx, store, nonce) {
       { type: "text", text: store.title.slice(0,300), wrap: true },
       { type: "text", text: "ご自身で始めたMEO Harnessの登録だけ確認してください。心当たりがなければ押さないでください。", wrap: true },
     ]}, footer: { type: "box", layout: "vertical", contents: [
-      { type: "button", action: { type: "postback", label: "1 このLINEで確認", data: "meo-confirm:v1:" + nonce } },
-      { type: "button", action: { type: "uri", label: "2 登録画面へ戻る", uri } },
+      { type: "button", style: "primary", action: { type: "postback", label: "1 このLINEで確認", data: "meo-confirm:v1:" + nonce,
+        displayText: "「1 このLINEで確認」を押しました。元の登録画面で結果を確認してください。" } },
+      { type: "button", style: "secondary", action: { type: "uri", label: "2 登録画面へ戻る", uri } },
       { type: "text", text: "1で確認してから、2で元のブラウザへ戻ります。戻る操作だけでは確認は完了しません。5分以内に、元の画面で「通知先を確認して次へ」を押してください。", size: "sm", wrap: true },
     ]},
   }};

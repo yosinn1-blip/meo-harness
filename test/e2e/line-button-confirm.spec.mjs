@@ -31,7 +31,7 @@ async function ready(page){
 }
 async function send(page){
  await page.getByRole('button',{name:'確認メッセージをLINEに送る',exact:true}).click();
- await expect(page.getByRole('link',{name:'LINEで確認メッセージを開く',exact:true})).toBeVisible();
+ await expect(page.getByRole('link',{name:'LINEのカードで「1 このLINEで確認」を押す',exact:true})).toBeVisible();
 }
 const action=()=>app.pushes.at(-1).messages[0].contents.footer.contents[0].action.data;
 async function receipt(page,data=action(),userId='line-fixture'){
@@ -111,11 +111,13 @@ test('separate LINE session confirms; wrong return stays generic; original owner
 });
 test('PIN fallback is explicit and old button is rejected; switching back invalidates old PIN',async({page})=>{
  await ready(page);await send(page);const old=action();await receipt(page);await expect(page.getByRole('button',{name:'通知先を確認して次へ'})).toBeVisible();
- await fixture(page,'advance',{ms:60001});await page.getByText('ボタンを使えない場合は番号で確認',{exact:true}).click();
+ await fixture(page,'advance',{ms:60001});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ await expect(page.getByRole('button',{name:'番号で確認に切り替えて送る',exact:true,includeHidden:true})).toBeEnabled();await page.getByText('ボタンを使えない場合は番号で確認',{exact:true}).click();
  await page.getByRole('button',{name:'番号で確認に切り替えて送る',exact:true}).click();
  await expect(page.getByLabel('確認番号',{exact:true})).toBeVisible();const pin=(await (await fixture(page,'pin')).json()).pin;
  await receipt(page,old);await expect(page.getByRole('button',{name:'通知先を確認して次へ'})).toHaveCount(0);
- await fixture(page,'advance',{ms:60001});await page.getByText('番号を入力せずボタンで確認する',{exact:true}).click();
+ await fixture(page,'advance',{ms:60001});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ await expect(page.getByRole('button',{name:'ボタン確認へ切り替えて送る',exact:true,includeHidden:true})).toBeEnabled();await page.getByText('番号を入力せずボタンで確認する',{exact:true}).click();
  await page.getByRole('button',{name:'ボタン確認へ切り替えて送る',exact:true}).click();
  await expect(page.getByLabel('確認番号',{exact:true})).toHaveCount(0);
  const csrf=(await (await page.request.get(app.baseURL+'/api/self/status')).json()).csrf;
@@ -129,9 +131,11 @@ for(const scenario of [{name:'quota-full',settings:{quota:0}},{name:'quota-unkno
   const [response]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/api/self/line/button')),
     page.getByRole('button',{name:'確認メッセージをLINEに送る',exact:true}).click()]);
   expect(response.ok()).toBe(false);await expect(page.locator('#error')).toBeVisible();
+  await expect(page.getByRole('button',{name:'確認メッセージをLINEに送る',exact:true})).toBeDisabled();
+  await fixture(page,'advance',{ms:60001});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
   await expect(page.getByRole('button',{name:'確認メッセージをLINEに送る',exact:true})).toBeEnabled();
   await expect(page.getByRole('button',{name:'確認メッセージをLINEに送る',exact:true})).toBeVisible();
-  await expect(page.getByRole('link',{name:'LINEで確認メッセージを開く'})).toHaveCount(0);
+  await expect(page.getByRole('link',{name:'LINEのカードで「1 このLINEで確認」を押す'})).toHaveCount(0);
   await expect(page.getByLabel('確認番号',{exact:true})).toHaveCount(0);
   expect((await app.db.prepare('SELECT state FROM stores').first()).state).toBe('line_pending');
   expect(app.pushes).toHaveLength(scenario.name==='provider-rejected'?1:0);
