@@ -67,6 +67,9 @@ export function readSelfConfig(env) {
     pilotMode,
     pilotEnabled,
     autoLinePin: !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true" && env.SELF_LINE_AUTO_PIN_ENABLED === "true",
+    // Manual button confirmation never replaces the separately gated auto-PIN flow.
+    lineButtonConfirm: !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true" &&
+      env.SELF_LINE_BUTTON_CONFIRM_ENABLED === "true" && env.SELF_LINE_AUTO_PIN_ENABLED !== "true",
     processingEnabled: !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true",
     limits,
   };

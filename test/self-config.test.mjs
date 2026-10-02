@@ -29,3 +29,12 @@ test("registration closure does not disable authenticated processing", () => {
   assert.equal(c.registrationEnabled, false);
   assert.equal(c.processingEnabled, true);
 });
+test("LINE button is default OFF, strict manual-only opt-in, and closed in pilot/processing OFF", () => {
+  for(const value of [undefined,"false","","TRUE",true])
+    assert.equal(readSelfConfig(fixtureEnv({}, {SELF_LINE_BUTTON_CONFIRM_ENABLED:value})).lineButtonConfirm,false);
+  const enabled=fixtureEnv({}, {SELF_LINE_BUTTON_CONFIRM_ENABLED:"true"});
+  assert.equal(readSelfConfig(enabled).lineButtonConfirm,true);
+  for(const override of [{SELF_LINE_AUTO_PIN_ENABLED:"true"},{SELF_PROCESSING_ENABLED:"false"},{SELF_PILOT_OWNER_SHA256:""}])
+    assert.equal(readSelfConfig({...enabled,...override}).lineButtonConfirm,false);
+  assert.equal(readSelfConfig({...enabled,SELF_LINE_AUTO_PIN_ENABLED:"true"}).autoLinePin,true);
+});

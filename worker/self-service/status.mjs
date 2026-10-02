@@ -17,6 +17,7 @@ export async function getSelfStatus(ctx, request) {
     pilotMode: c.pilotMode,
     processingEnabled: c.processingEnabled,
     lineAutoPin: c.autoLinePin,
+    lineButtonConfirm: c.lineButtonConfirm,
     limits: c.limits,
     termsVersion: ctx.env.SELF_TERMS_VERSION ?? null,
     turnstileSiteKey: ctx.env.TURNSTILE_SITE_KEY ?? null,
@@ -94,4 +95,16 @@ export async function getSelfStatus(ctx, request) {
     })),
     notice: s.notice,
   };
+}
+// A LINE return/scanner must not create an anonymous session or expose another
+// browser's own registration. Only the original, still-live session resumes.
+export async function getLineReturnStatus(ctx,request) {
+  const session=await readSession(ctx,request);
+  const mismatch={ok:true,state:"line_return_mismatch",csrf:null};
+  if (!session?.owner_sub) return mismatch;
+  const store=await findOwnedStore(ctx,session.owner_sub);
+  if (!store) return mismatch;
+  const link=await ctx.db.prepare("SELECT session_hash FROM line_links WHERE store_id=?").bind(store.id).first();
+  if (link?.session_hash!==session.token_hash) return mismatch;
+  return getSelfStatus(ctx,request);
 }

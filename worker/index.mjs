@@ -423,6 +423,10 @@ async function processLineEvents(events, env) {
   const lineCheckSignal = AbortSignal.timeout(20000), lineChecks = [];
   for (const event of events) {
     try {
+      if (env.SELF_DB && event.type === 'postback' && /^meo-confirm:/.test(event.postback?.data ?? '')) {
+        const {receiveLineButton}=await import('./self-service/line-button-confirm.mjs');
+        await receiveLineButton(createSelfContext(env),event);continue;
+      }
       if (env.SELF_DB && event.type === 'postback' && /^(approve|skip|edit):ss_/.test(event.postback?.data ?? '')) {
         const {handleSelfPostback}=await import('./self-service/approvals.mjs');
         const selfCtx=createSelfContext(env);

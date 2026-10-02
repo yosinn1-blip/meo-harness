@@ -1,4 +1,4 @@
-import { getSelfStatus } from "./status.mjs";
+import { getSelfStatus, getLineReturnStatus } from "./status.mjs";
 import {
   readSession,
   createSession,
@@ -11,7 +11,8 @@ import { discoverLocations, selectLocation } from "./locations.mjs";
 import { readBody, consumeRate, ipBucket } from "./abuse.mjs";
 import { SelfError, publicError, ensure } from "./errors.mjs";
 import { startGoogle, finishGoogle } from "./oauth.mjs";
-import { issueLineCode, sendLineCheck, verifyLinePin } from "./line-link.mjs";
+import { issueLineCode, sendLineCheck, sendLineButton, verifyLinePin } from "./line-link.mjs";
+import { confirmLineButton } from "./line-button-confirm.mjs";
 import { activateStore, pauseStore, disconnectStore } from "./lifecycle.mjs";
 import { readOwnedReply } from "./approvals.mjs";
 import { sha256 } from "./crypto.mjs";
@@ -43,6 +44,10 @@ export async function handleSelfRequest(request, env, ctx) {
   if (!path.startsWith("/api/self/")) return null;
   try {
     if (!ctx.db) throw new SelfError("REGISTRATION_CLOSED", 503);
+    if (path === "/api/self/line/return-status" && request.method === "GET")
+      return selfJson(await getLineReturnStatus(ctx,request));
+    if (["/api/self/line/button","/api/self/line/confirm"].includes(path) && request.method !== "POST")
+      throw new SelfError("NOT_FOUND",404);
     if (path === "/api/self/google/callback" && request.method === "GET") {
       try {
         return await finishGoogle(ctx, request);
@@ -128,6 +133,12 @@ export async function handleSelfRequest(request, env, ctx) {
         break;
       case "/api/self/line/test":
         result = await sendLineCheck(ctx, actor);
+        break;
+      case "/api/self/line/button":
+        result = await sendLineButton(ctx, actor);
+        break;
+      case "/api/self/line/confirm":
+        result = await confirmLineButton(ctx, actor, body);
         break;
       case "/api/self/line/verify":
         result = await verifyLinePin(ctx, actor, body.pin);

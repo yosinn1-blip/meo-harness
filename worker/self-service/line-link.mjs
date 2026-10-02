@@ -5,6 +5,7 @@ import { sha256, hmac, safeEqual } from "./crypto.mjs";
 import { getStore, requireStore } from "./store-repository.mjs";
 import { consumeRate } from "./abuse.mjs";
 import { deliverLineCheck } from "./line-check-delivery.mjs";
+import { requireButtonMode } from "./line-button-confirm.mjs";
 export function authorizeLineActor({ source, registeredUserId, active }) {
   return Boolean(
     active &&
@@ -95,6 +96,12 @@ export async function sendLineCheck(ctx, actor) {
   const store=await requireStore(ctx,actor);
   ensure(store.state==="line_pending" && store.pendingLineUserId,"LINE_PENDING_REQUIRED",409);
   return deliverLineCheck(ctx,{store,sessionHash:actor.sessionHash});
+}
+export async function sendLineButton(ctx, actor) {
+  requireButtonMode(ctx);
+  const store=await requireStore(ctx,actor);
+  ensure(store.state==="line_pending" && store.pendingLineUserId,"LINE_PENDING_REQUIRED",409);
+  return deliverLineCheck(ctx,{store,sessionHash:actor.sessionHash,method:"button"});
 }
 export async function verifyLinePin(ctx, actor, pin) {
   ensure(!readSelfConfig(ctx.env).pilotMode, "PROCESSING_CLOSED", 503);

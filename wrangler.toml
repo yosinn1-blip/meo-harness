@@ -35,6 +35,7 @@ migrations_dir = "migrations"
 VERSION = "0.1.0"
 SELF_REGISTRATION_ENABLED = "true"
 SELF_PROCESSING_ENABLED = "true"
+SELF_LINE_BUTTON_CONFIRM_ENABLED = "false"
 SELF_PUBLIC_ORIGIN = "https://meo-harness.yosinn1.workers.dev"
 TURNSTILE_SITE_KEY = "0x4AAAAAAFE6uTVTTIAlwcWr"
 # 本人限定の接続確認。許可対象はSecret SELF_PILOT_OWNER_SHA256。一般受付/処理は閉鎖。
