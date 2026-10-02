@@ -19,6 +19,7 @@ export async function getSelfStatus(ctx, request) {
     lineAutoPin: c.autoLinePin,
     lineAutoButton: c.autoLineButton,
     lineButtonConfirm: c.lineButtonConfirm,
+    ...(ctx.env.SELF_LINE_ONE_BUTTON_ENABLED !== undefined ? {lineOneButton:c.lineOneButton} : {}),
     limits: c.limits,
     termsVersion: ctx.env.SELF_TERMS_VERSION ?? null,
     turnstileSiteKey: ctx.env.TURNSTILE_SITE_KEY ?? null,

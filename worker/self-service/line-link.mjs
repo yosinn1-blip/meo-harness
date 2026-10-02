@@ -57,7 +57,7 @@ export async function consumeLineCode(ctx, event, { deferCheck } = {}) {
   const hash = await sha256(code), now = ctx.now();
   const config = readSelfConfig(ctx.env);
   const automatic = config.autoLinePin || config.autoLineButton;
-  const method = config.autoLineButton ? "button" : "pin";
+  const method = config.autoLineButton ? (config.lineOneButton ? "link" : "button") : "pin";
   if (automatic) ensure(event.type === "message" && event.message?.type === "text", "LINE_CODE_INVALID");
   const liveSession = automatic
     ? " AND EXISTS(SELECT 1 FROM sessions b WHERE b.token_hash=l.session_hash AND b.owner_sub=s.owner_sub AND b.expires_at>?)"
@@ -123,7 +123,7 @@ export async function sendLineButton(ctx, actor) {
   requireButtonMode(ctx);
   const store=await requireStore(ctx,actor);
   ensure(store.state==="line_pending" && store.pendingLineUserId,"LINE_PENDING_REQUIRED",409);
-  return deliverLineCheck(ctx,{store,sessionHash:actor.sessionHash,method:"button"});
+  return deliverLineCheck(ctx,{store,sessionHash:actor.sessionHash,method:readSelfConfig(ctx.env).lineOneButton?"link":"button"});
 }
 export async function verifyLinePin(ctx, actor, pin) {
   ensure(!readSelfConfig(ctx.env).pilotMode, "PROCESSING_CLOSED", 503);

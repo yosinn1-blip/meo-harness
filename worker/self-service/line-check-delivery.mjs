@@ -4,6 +4,7 @@ import { LIMITS, dateKeys } from "./contracts.mjs";
 import { hmac, sha256, safeEqual } from "./crypto.mjs";
 import { readSelfConfig } from "./config.mjs";
 import { reservePush, sendReservedPush, settleUsage } from "./budget.mjs";
+import { linkConfirmationMessage } from "./line-confirm-link.mjs";
 import { DELIVERY_ELIGIBLE as eligible, deliveryIdentity as identity, newButtonChallenge, buttonMessage,
   BUTTON_PURPOSE, readButtonCheck, requireButtonMode } from "./line-button-confirm.mjs";
 const LEASE_MS = 90000;
@@ -19,12 +20,17 @@ async function dailyLineCheckLimit(ctx, store) {
 }
 // Only the signed webhook's consumed link or the authenticated browser may call this.
 export async function deliverLineCheck(ctx, { store, sessionHash, automatic = false, method = "pin" }) {
-  ensure(["pin","button"].includes(method),"LINE_CONFIRMATION_INVALID");
-  const button = method === "button";
+  ensure(["pin","button","link"].includes(method),"LINE_CONFIRMATION_INVALID");
+  const button = method === "button", linkMode = method === "link";
+  // Only the opted-in manual PIN fallback shares the new card binding window.
+  // Legacy autoPIN and unset/OFF legacy PIN delivery retain their prior behavior.
+  const keepPinBinding = linkMode || (!automatic && !button && readSelfConfig(ctx.env).lineOneButton);
   function checkButtonMode() {
-    if (!button) return;
+    if (!button && !linkMode) return;
     requireButtonMode(ctx);
-    ensure(!automatic || readSelfConfig(ctx.env).autoLineButton,"LINE_BUTTON_DISABLED",409);
+    const config = readSelfConfig(ctx.env);
+    ensure(!linkMode || config.lineOneButton,"LINE_BUTTON_DISABLED",409);
+    ensure(!automatic || config.autoLineButton,"LINE_BUTTON_DISABLED",409);
   }
   checkButtonMode();
   const link = await ctx.db.prepare("SELECT session_hash FROM line_links WHERE store_id=?").bind(store.id).first();
@@ -42,7 +48,7 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
     .bind(store.id,store.generation,sessionHash,attemptId,n+LEASE_MS,n,...identity(store,sessionHash,n),automatic?1:0,n);
   checkButtonMode();
   let claim;
-  if (button) {
+  if (button || linkMode) {
     try {
       const claimed = await ctx.db.batch([
         claimStatement,
@@ -51,9 +57,9 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
         // The code is already consumed. Keep its binding alive for the new card's
         // entire five-minute window, without extending any unused code validity.
         ctx.db.prepare("UPDATE line_links SET expires_at=MAX(expires_at,?) WHERE store_id=? AND session_hash=? AND consumed_at IS NOT NULL")
-          .bind(challenge.expiresAt,store.id,sessionHash),
-        ctx.db.prepare("INSERT OR REPLACE INTO line_button_checks(store_id,owner_sub,generation,session_hash,line_user_id,attempt_id,purpose,nonce_hash,expires_at,received_at,consumed_at) VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL)")
-          .bind(store.id,store.ownerSub,store.generation,sessionHash,store.pendingLineUserId,attemptId,BUTTON_PURPOSE,challenge.hash,challenge.expiresAt),
+          .bind(button?challenge.expiresAt:n+LIMITS.pinMs,store.id,sessionHash),
+        ...(button?[ctx.db.prepare("INSERT OR REPLACE INTO line_button_checks(store_id,owner_sub,generation,session_hash,line_user_id,attempt_id,purpose,nonce_hash,expires_at,received_at,consumed_at) VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL)")
+          .bind(store.id,store.ownerSub,store.generation,sessionHash,store.pendingLineUserId,attemptId,BUTTON_PURPOSE,challenge.hash,challenge.expiresAt)]:[]),
         ctx.db.prepare("DELETE FROM mutation_guards"),
       ]);
       claim=claimed[0];
@@ -86,6 +92,7 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
     const reservation = await reservePush(io,{id,storeId:store.id});
     ensure(reservation.ok,reservation.code,429); reserved = true;
     ensure(!deadline?.aborted,"LINE_RETRY_REQUIRED",429);
+    if (linkMode) checkButtonMode();
     let pin, pinHash;
     if (!button) {
       let random;
@@ -100,6 +107,11 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
         AND EXISTS(SELECT 1 FROM line_button_checks WHERE store_id=? AND attempt_id=? AND nonce_hash=? AND expires_at>?)`)
         .bind(expiresAt,ctx.now(),store.id,attemptId,ctx.now(),...identity(store,sessionHash,ctx.now()),store.id,attemptId,challenge.hash,ctx.now()),
     ] : [
+      ...(keepPinBinding?[
+        ctx.db.prepare(`UPDATE line_links SET expires_at=MAX(expires_at,?)
+          WHERE store_id=? AND session_hash=? AND consumed_at IS NOT NULL AND EXISTS(${eligible})`)
+          .bind(expiresAt,store.id,sessionHash,...identity(store,sessionHash,ctx.now())),
+      ]:[]),
       ctx.db.prepare(`INSERT OR REPLACE INTO line_checks (store_id,pin_hash,generation,session_hash,attempts,expires_at)
         SELECT ?,?,?,?,0,? WHERE EXISTS(${eligible}) AND EXISTS(SELECT 1 FROM line_check_deliveries
         WHERE store_id=? AND attempt_id=? AND state='preparing' AND lease_until>?)`)
@@ -120,7 +132,7 @@ export async function deliverLineCheck(ctx, { store, sessionHash, automatic = fa
     ensure(!deadline?.aborted,"LINE_RETRY_REQUIRED",429);
     checkButtonMode();
     dispatched = true;
-    await sendReservedPush(io,{id,to:store.pendingLineUserId,messages:[button?buttonMessage(ctx,store,challenge.nonce):{type:"text",text:`MEO Harness 確認番号: ${pin}\n5分以内に、登録を始めたブラウザの画面へ戻って入力してください。`}],retryKey:attemptId});
+    await sendReservedPush(io,{id,to:store.pendingLineUserId,messages:[button?buttonMessage(ctx,store,challenge.nonce):linkMode?linkConfirmationMessage(ctx,store,pin,expiresAt):{type:"text",text:`MEO Harness 確認番号: ${pin}\n5分以内に、登録を始めたブラウザの画面へ戻って入力してください。`}],retryKey:attemptId});
     await finish("sent");
     return {ok:true,expiresAt};
   } catch(error) {
