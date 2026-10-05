@@ -26,7 +26,7 @@
       <section class="hero">
         <div class="wrap hero-inner">
           <div class="hero-copy">
-            <p class="eyebrow">Googleの口コミ返信アシスタント</p>
+            <p class="eyebrow">個人店向け・Googleの口コミ返信アシスタント</p>
             <h1><span class="nw">Googleの口コミ返信を、</span><br /><span class="nw">LINEで<span class="key">「送信」</span>を</span><span class="nw">押すだけに。</span></h1>
             <p class="lead">Googleの口コミへの返信案を、いつものLINEへ。内容を確認して「送信」を押すとGoogleに公開されます。直したいときは「編集する」から書き換えられます。</p>
             <div class="hero-actions">
@@ -46,20 +46,20 @@
               <div class="phone-bar">MEO Harness</div>
               <div class="chat">
                 <div class="card">
-                  <div class="card-head">Yoshiki Cafe</div>
+                  <div class="card-head">🔔 新着クチコミ（Yoshiki Cafe）</div>
                   <div class="card-body">
                     <p class="stars" aria-label="星5つ">★★★★★ <span>山田様</span></p>
-                    <p class="review">ランチのパスタがとても美味しかったです。店員さんの対応も丁寧でした。</p>
-                    <p class="label">AIの返信案</p>
+                    <p class="review">「ランチのパスタがとても美味しかったです。店員さんの対応も丁寧でした。」</p>
+                    <p class="label">返信案</p>
                     <p class="draft">山田様、ご来店と温かいお言葉をありがとうございます。パスタを気に入っていただけて嬉しいです。またのお越しをお待ちしております。</p>
+                    <p class="fine">この返信案は7日で消えます。何も押さなければ投稿されません。</p>
                   </div>
                   <div class="card-actions">
                     <span class="chip chip-send">送信</span>
                     <span class="chip chip-edit">編集する</span>
                   </div>
                 </div>
-                <p class="bubble-me">送信</p>
-                <p class="bubble-bot">Googleへの投稿を確認しました。</p>
+                <p class="bubble-bot">返信がGoogleに投稿されたことを確認しました。</p>
               </div>
             </div>
             <figcaption>画面はイメージです。店舗・口コミは架空の例です。</figcaption>
@@ -91,7 +91,7 @@
                 <svg viewBox="0 0 24 24"><path d="m3 17.25 11.06-11.06 3.75 3.75L6.75 21H3v-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83Z"/></svg>
               </div>
               <h3>確認して「送信」。直すのも簡単</h3>
-              <p>そのままでよければ「送信」。少し直したいときは「編集する」を押して、直した文章をLINEで送るだけです。</p>
+              <p>そのままでよければ「送信」。少し直したいときは「編集する」を押し、直した文章をLINEで送ります。直した内容の確認カードが届くので、よければ「送信」を押します。</p>
             </article>
           </div>
         </div>
@@ -100,28 +100,29 @@
       <section class="section section-tint" id="steps" aria-labelledby="steps-title">
         <div class="wrap">
           <p class="section-kicker">はじめ方</p>
-          <h2 id="steps-title">GoogleとLINEをつなぐ、3つのステップ。</h2>
-          <p class="section-lead">用意するのは、お店のGoogleビジネスプロフィールを管理しているGoogleアカウントとLINEだけ。</p>
+          <h2 id="steps-title">スマホ1台で、GoogleとLINEをつなぐ3つのステップ。</h2>
+          <p class="section-lead">登録できるのは、Googleマップのお店ページを管理しているGoogleアカウント（オーナーさんなど）をお持ちの方です。オーナーや本部が管理しているお店は、その方にご相談ください。登録はLINEが入ったスマホで進めます。</p>
           <ol class="steps">
             <li>
               <span class="num" aria-hidden="true">1</span>
               <div>
-                <h3>Googleで接続して、お店を選ぶ</h3>
-                <p>「Googleで接続」を押して許可すると、管理しているお店が一覧で出てきます。</p>
+                <h3>Googleをつないで、お店を選ぶ</h3>
+                <p>「初めての方：Googleでお店を接続」を押し、Googleの画面で許可します。管理しているお店が一覧で出るので「この店舗を使う」を押します。ログインと許可はご本人が行い、パスワードはGoogleの画面にだけ入れます。</p>
               </div>
             </li>
+            <!-- 手順2のボタン名は SELF_LINE_ONE_BUTTON_ENABLED=true 前提（line-confirm-link.mjs:14 / app.js.txt:552）。フラグを戻すときはこの文も戻す -->
             <li>
               <span class="num" aria-hidden="true">2</span>
               <div>
-                <h3>LINEで本人確認</h3>
-                <p>公式アカウントを友だち追加して、画面に出るコードを送り、届いた6桁の番号を入れます。</p>
+                <h3>LINEを返信案の届け先にする</h3>
+                <p>「LINEを開いてコードを送る」を押します。初回は友だち追加の画面が出るので、追加して登録画面に戻り、同じボタンをもう一度押します。コードが入力欄に入ったら、右の送信矢印を1回押します。届いたカードの「確認して登録画面へ進む」で登録画面に戻り、「通知先を確認して次へ」を押します。</p>
               </div>
             </li>
             <li>
               <span class="num" aria-hidden="true">3</span>
               <div>
-                <h3>利用を開始する</h3>
-                <p>接続が完了すると、新しい口コミへの下書きを原則1日1回、LINEにまとめて届けます。</p>
+                <h3>条件を読んで、使い始める</h3>
+                <p>利用条件を読んでチェックを入れ、「利用を開始する」を押せば完了です。返信案は登録直後には届きません。</p>
               </div>
             </li>
           </ol>
@@ -147,8 +148,8 @@
               <p>有料プランへ勝手に切り替わることはありません。有料にする場合は事前にお知らせし、同意なしに切り替えません。</p>
             </div>
             <div class="safe-item">
-              <h3>口コミの本文は7日で削除</h3>
-              <p>返信の下書きを作るためだけに使い、広告に使ったり売ったりはしません。<a href="/self/privacy">データの取り扱い</a></p>
+              <h3>口コミの本文は7日を目安に削除</h3>
+              <p>返信案を作るため、口コミの文章と投稿者名を外部のAIサービス（Groq）へ送ります。広告のために売ったり、AIの学習に使ったりはしません。<a href="/self/privacy">データの取り扱い</a></p>
             </div>
           </div>
         </div>
@@ -161,8 +162,8 @@
           <dl class="conditions">
             <div><dt>料金</dt><dd>無料</dd></div>
             <div><dt>受付</dt><dd>先着10店舗（埋まったら一時停止します）</dd></div>
-            <div><dt>AIの下書き</dt><dd>1店舗あたり月30件まで</dd></div>
-            <div><dt>通知</dt><dd>だいたい1日1回・朝9時以降にまとめて届きます</dd></div>
+            <div><dt>AIの下書き</dt><dd>1店舗あたり月30件まで（最初は直近60日の返していない口コミから5件まで）</dd></div>
+            <div><dt>通知</dt><dd>返していない口コミがある日だけ、原則1日1回・朝9時以降にまとめて届きます（店舗数などにより遅れる日があります）</dd></div>
           </dl>
           <p class="note">個人で運営しているサービスです。検索順位や集客の効果は保証できません。AIの下書きは間違えることがあるので、送る前に一度読んでください。</p>
         </div>
@@ -175,7 +176,7 @@
           <div class="faq-list">
             <details>
               <summary>はじめる前に何が必要ですか？</summary>
-              <p>お店のGoogleビジネスプロフィールを管理しているGoogleアカウントとLINEが必要です。ご自身でログインし、接続を許可します。パスワードや認証コードを運営者に送る必要はありません。</p>
+              <p>Googleマップのお店ページを管理しているGoogleアカウントと、LINEが入ったスマホが必要です。ご自身でログインし、接続を許可します。パスワードや認証コードを運営者に送る必要はありません。</p>
             </details>
             <details>
               <summary>返信は自動で公開されますか？</summary>
@@ -184,6 +185,14 @@
             <details>
               <summary>通知はすぐに届きますか？</summary>
               <p>即時通知ではありません。原則1日1回・朝9時以降にまとめて届けます。新しい口コミや送れる下書きがない日は、通知されません。</p>
+            </details>
+            <details>
+              <summary>なぜ無料なのですか？</summary>
+              <p>個人で開発している、試験運用中のサービスだからです。そのため、先着10店舗に限って無料で提供しています。</p>
+            </details>
+            <details>
+              <summary>オーナーさんや本部がGoogleを管理しています。店長でも使えますか？</summary>
+              <p>返信案は、登録の途中でコードを送ったLINEに届きます。店長さんのGoogleアカウントにお店の管理権限があれば、店長さんご自身のGoogleアカウントとLINEで登録できます。権限がない場合は、オーナーさんにGoogleビジネスプロフィールの管理者として招待してもらい、承諾してから登録してください（1つのGoogleアカウントで1店舗）。</p>
             </details>
           </div>
           <div class="help-links">
@@ -210,7 +219,7 @@
       <section class="cta">
         <div class="wrap">
           <h2>口コミへの返信を、今日から「送信」だけに。</h2>
-          <p>お店を管理するGoogleアカウントとLINEをご用意ください。</p>
+          <p>お店を管理するGoogleアカウントと、LINEの入ったスマホをご用意ください。</p>
           <a class="btn btn-primary btn-large" href="/start">無料ではじめる</a>
         </div>
       </section>
@@ -225,6 +234,7 @@
           <a href="/self/help/faq">よくある質問</a>
           <a href="/account">アカウント</a>
         </nav>
+        <p class="foot-note">MEO Harnessは個人開発のサービスで、Google・LINEの公式サービスではありません。Google は Google LLC の商標です。</p>
       </div>
     </footer>
   </body>

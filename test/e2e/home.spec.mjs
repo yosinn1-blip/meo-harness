@@ -80,6 +80,27 @@ for (const width of [320, 375, 768, 1280]) {
     if (process.env.HOME_BASELINE === '1')
       await page.screenshot({ path: `output/self-service/home-before-${width}.png`, fullPage: true });
     await expectNoOverflow(page);
+    // The sample LINE card shows 送信 (left) and 編集する (right) side by side, like the real card.
+    const send = await page.locator('.chip-send').boundingBox();
+    const edit = await page.locator('.chip-edit').boundingBox();
+    expect(Math.abs(send.y - edit.y)).toBeLessThan(1);
+    expect(send.x).toBeLessThan(edit.x);
+    expect(send.height).toBeGreaterThanOrEqual(40);
+    expect(edit.height).toBeGreaterThanOrEqual(40);
+    // .card clips overflow, so check each label fits inside its own chip.
+    for (const chip of await page.locator('.chip').all())
+      expect(await chip.evaluate(element => element.scrollWidth <= element.clientWidth), await chip.innerText()).toBe(true);
+    const header = await page.locator('header').boundingBox();
+    const topCta = await page.locator('.top-cta').boundingBox();
+    expect(topCta.height).toBeGreaterThanOrEqual(44);
+    expect(topCta.y).toBeGreaterThanOrEqual(header.y);
+    expect(topCta.y + topCta.height).toBeLessThanOrEqual(header.y + header.height);
+    for (const link of await page.locator('.foot nav a').all())
+      expect((await link.boundingBox()).height, await link.innerText()).toBeGreaterThanOrEqual(40);
+    if (width === 320) {
+      const lines = await page.locator('.hero h1').evaluate(element => element.getBoundingClientRect().height / parseFloat(getComputedStyle(element).lineHeight));
+      expect(Math.round(lines)).toBeLessThanOrEqual(3);
+    }
     const hero = page.locator('.hero');
     await expect(hero.locator('a[href="/account"]')).toBeVisible();
     await expect(hero.locator('figure figcaption')).toContainText('画面はイメージです');
@@ -99,7 +120,7 @@ for (const width of [320, 375, 768, 1280]) {
     expect(pricingContent).toContain('先着10店舗');
     expect(pricingContent).toContain('月30件');
     const disclosures = page.locator('#faq details');
-    await expect(disclosures).toHaveCount(3);
+    await expect(disclosures).toHaveCount(5);
     for (const disclosure of await disclosures.all()) {
       const summary = disclosure.locator('summary');
       await summary.click();
@@ -156,7 +177,7 @@ test('home works without JavaScript and exposes support, pricing and existing-ac
       await disclosure.locator('summary').click();
       await expect(disclosure).toHaveAttribute('open', '');
     }
-    await expect(page.locator('#faq details[open]')).toHaveCount(3);
+    await expect(page.locator('#faq details[open]')).toHaveCount(5);
     await expectNoOverflow(page);
     await page.screenshot({ path: 'output/self-service/home-no-js-mobile.png', fullPage: true });
     for (const [path, heading] of [['/self/help/faq', 'よくある質問'], ['/self/help/report', '問題を報告・相談する']]) {

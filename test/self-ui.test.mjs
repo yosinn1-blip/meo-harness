@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildWorker } from "../scripts/build-self-test.mjs";
+import { buildReviewBubble } from "../src/line-flex.mjs";
 const compiled = await buildWorker();
 const worker = (await import(compiled)).default;
 const verificationFile = 'google0123456789abcdef.html';
@@ -195,7 +196,7 @@ test('home FAQ uses native disclosures for accounts, manual sending and daily no
   const faq = html.match(/<section[^>]*id="faq"[^>]*>[\s\S]*?<\/section>/)?.[0];
   assert.ok(faq, 'FAQ section exists');
   const disclosures = [...faq.matchAll(/<details(?:\s[^>]*)?>[\s\S]*?<\/details>/g)].map(match => match[0]);
-  assert.equal(disclosures.length, 3);
+  assert.equal(disclosures.length, 5);
   for (const disclosure of disclosures) assert.match(disclosure, /<summary(?:\s[^>]*)?>[\s\S]+?<\/summary>/);
   assert.match(faq, /Google(?:アカウント|ビジネスプロフィール)/);
   assert.match(faq, /LINE/);
@@ -215,4 +216,59 @@ test('home supplies a keyboard skip destination and labels the illustrative revi
   assert.ok(figure, 'illustrative review belongs to a figure');
   assert.match(figure, /<figcaption(?:\s[^>]*)?>[\s\S]*画面はイメージです[\s\S]*<\/figcaption>/);
   assert.match(figure, /架空/);
+});
+
+async function homeHtml() {
+  const response = await worker.fetch(new Request('https://meo.test/'), {}, {});
+  return response.text();
+}
+const homeSection = (html, id) => html.match(new RegExp(`<section[^>]*id="${id}"[^>]*>[\\s\\S]*?<\\/section>`))?.[0] ?? '';
+
+test('home steps quote the printed button names of the production one-button LINE flow', async () => {
+  const html = await homeHtml();
+  const steps = homeSection(html, 'steps');
+  assert.ok(steps, 'steps section exists');
+  for (const name of ['初めての方：Googleでお店を接続', 'この店舗を使う', 'LINEを開いてコードを送る', '確認して登録画面へ進む', '通知先を確認して次へ', '利用を開始する'])
+    assert.ok(steps.includes(`「${name}」`), name);
+  assert.doesNotMatch(steps, /「Googleで接続」|6桁|LINEで本人確認/);
+  assert.ok(steps.includes('返信案は登録直後には届きません。'));
+  assert.equal(html.split('登録直後には届きません').length - 1, 1, 'stated once');
+  assert.match(steps, /スマホ1台/);
+  assert.doesNotMatch(html, /次の朝9時|昼以降|\d+分ほど|\d+分で/);
+});
+
+test('home preview card mirrors the real LINE review card wording', async () => {
+  const html = await homeHtml();
+  const figure = html.match(/<figure\b[^>]*>[\s\S]*?<\/figure>/)?.[0] ?? '';
+  const bubble = buildReviewBubble({ replyId: 'r1', review: { star: 5, name: '山田様', text: '例', draft: '例' }, bizName: 'Yoshiki Cafe', editable: true });
+  const head = bubble.header.contents[0].text;
+  const texts = bubble.body.contents.flatMap(box => box.contents ?? []).map(item => item.text);
+  const notice = texts.find(text => /7日/.test(text ?? ''));
+  assert.ok(notice, 'real card has the 7-day notice');
+  assert.ok(figure.includes(`<div class="card-head">${head}</div>`), head);
+  assert.ok(figure.includes(`<p class="fine">${notice}</p>`), notice);
+  assert.ok(figure.includes('<p class="label">返信案</p>'));
+  assert.match(figure, /<p class="review">「[^<]+」<\/p>/);
+  assert.doesNotMatch(figure, /bubble-me|AIの返信案|Googleへの投稿を確認しました/);
+  assert.ok(figure.includes('返信がGoogleに投稿されたことを確認しました。'));
+  const actions = figure.match(/<div class="card-actions">([\s\S]*?)<\/div>/)?.[1] ?? '';
+  assert.match(actions, /chip-send">送信<\/span>[\s\S]*chip-edit">編集する<\/span>/);
+});
+
+test('home explains editing, AI data handling, limits, eligibility and the unofficial status', async () => {
+  const html = await homeHtml();
+  assert.ok(!html.includes('LINEで送るだけ'));
+  assert.ok(html.includes('直した内容の確認カードが届くので、よければ「送信」を押します。'));
+  assert.ok(html.includes('Groq'));
+  assert.ok(html.includes('href="/self/privacy"'));
+  assert.ok(homeSection(html, 'pricing').includes('直近60日'));
+  assert.ok(html.includes('公式サービスではありません'));
+  assert.ok(html.includes('個人店向け'));
+  assert.ok(homeSection(html, 'steps').includes('オーナーや本部が管理しているお店は'));
+  const faq = homeSection(html, 'faq');
+  assert.ok(faq.includes('コードを送ったLINEに届きます'));
+  assert.ok(faq.includes('試験運用'));
+  const summaries = [...faq.matchAll(/<summary>([\s\S]*?)<\/summary>/g)].map(match => match[1]);
+  assert.equal(summaries.length, 5);
+  assert.equal(new Set(summaries).size, summaries.length, 'FAQ questions are distinct');
 });
