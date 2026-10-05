@@ -275,6 +275,29 @@ test('home explains editing, AI data handling, limits, eligibility and the unoff
   assert.equal(new Set(summaries).size, summaries.length, 'FAQ questions are distinct');
 });
 
+test('draft scope and the five-per-notification batch are never described as a first-time draft cap', async () => {
+  // Production: every unreplied review from the last 60 days is drafted, one per
+  // scheduled run up to the monthly cap; only a LINE notification holds at most 5.
+  const { readFileSync } = await import('node:fs');
+  const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
+  assert.match(read('worker/self-service/scheduled.mjs'), /processSelfJobs\(ctx, \{ limit: 1 \}\)/);
+  assert.match(read('worker/self-service/notifications.mjs'), /ORDER BY j\.created_at,r\.id LIMIT 5"/);
+  assert.match(read('worker/self-service/contracts.mjs'), /firstPollDays: 60,/);
+  const quickstart = await (await worker.fetch(new Request('https://meo.test/self/help/quickstart'), {}, {})).text();
+  const pages = {
+    registration: read('worker/self-service/ui/app.js.txt'),
+    homePricing: homeSection(await homeHtml(), 'pricing'),
+    quickstart,
+    quickstartDoc: read('docs/quickstart.md'),
+  };
+  for (const [name, text] of Object.entries(pages)) {
+    assert.ok(text.includes('対象は直近60日以内で、まだ返信していない口コミです'), name + ': draft scope');
+    assert.match(text, /最大5件ずつLINE(?:に|へ)届きます/, name + ': notification batch');
+    assert.ok(text.includes('登録直後には届'), name + ': not right after registration');
+    assert.doesNotMatch(text, /(?:初回|最初)[^。<]*5件|5件まで/, name + ': no first-time five-draft cap');
+  }
+});
+
 test('quickstart is a mobile HTML guide that uses the printed button names', async () => {
   const response = await worker.fetch(new Request('https://meo.test/self/help/quickstart'), {}, {});
   assert.equal(response.status, 200);

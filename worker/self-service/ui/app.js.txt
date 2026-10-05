@@ -137,17 +137,49 @@ async function api(path, body) {
   return data;
 }
 // One-button mode: remember which check was sent as a number-only text, so the
-// guidance does not point at the card that this send invalidated. Only the
-// expiry timestamp is kept (never the number); a new card send replaces it.
+// guidance does not point at the card that this send invalidated. Only expiry
+// timestamps are kept (never the number); a new card send replaces them.
+// Stored forms: "<expiresAt>" (number-only send accepted), "<expiresAt>:unknown"
+// (a number-only send whose result is unknown issued this check) and
+// "from:<previous expiresAt or 0>" (a number-only send started; the server
+// replaces the previous check before dispatch, so any newer check came from it).
 const PIN_ONLY_KEY = "meo-line-pin-only";
-let pinOnlyExpiresAt = null;
-try { pinOnlyExpiresAt = Number(sessionStorage.getItem(PIN_ONLY_KEY)) || null; } catch {}
-function rememberPinOnly(expiresAt) {
-  pinOnlyExpiresAt = expiresAt || null;
+let pinOnlyExpiresAt = null, pinOnlyUnknown = false, pinOnlyFrom = null;
+try {
+  const saved = String(sessionStorage.getItem(PIN_ONLY_KEY) ?? "");
+  const from = /^from:(\d+)$/.exec(saved), at = /^(\d+)(:unknown)?$/.exec(saved);
+  if (from) pinOnlyFrom = Number(from[1]);
+  else if (at) { pinOnlyExpiresAt = Number(at[1]) || null; pinOnlyUnknown = Boolean(pinOnlyExpiresAt && at[2]); }
+} catch {}
+function storePinOnly() {
   try {
-    if (pinOnlyExpiresAt) sessionStorage.setItem(PIN_ONLY_KEY, String(pinOnlyExpiresAt));
+    if (pinOnlyFrom !== null) sessionStorage.setItem(PIN_ONLY_KEY, "from:" + pinOnlyFrom);
+    else if (pinOnlyExpiresAt) sessionStorage.setItem(PIN_ONLY_KEY, pinOnlyExpiresAt + (pinOnlyUnknown ? ":unknown" : ""));
     else sessionStorage.removeItem(PIN_ONLY_KEY);
   } catch {}
+}
+function rememberPinOnly(expiresAt, unknown = false) {
+  pinOnlyExpiresAt = expiresAt || null;
+  pinOnlyUnknown = Boolean(pinOnlyExpiresAt && unknown);
+  pinOnlyFrom = null;
+  storePinOnly();
+}
+function startPinOnly(previousExpiresAt) {
+  pinOnlyFrom = Number(previousExpiresAt) || 0;
+  storePinOnly();
+}
+// A card send must not inherit an unresolved number-only attempt. A settled
+// marker stays: it only matches its own check, so a replaced check ignores it.
+function forgetPinOnlyAttempt() {
+  if (pinOnlyFrom === null) return;
+  pinOnlyFrom = null;
+  storePinOnly();
+}
+// After a timeout or a lost response the browser never learns the send's
+// result. A check newer than the one seen before that send was issued by it.
+function bindPinOnly(check) {
+  if (pinOnlyFrom !== null && check?.pinAvailable && check.expiresAt && check.expiresAt !== pinOnlyFrom)
+    rememberPinOnly(check.expiresAt, true);
 }
 function button(text, action, cls = "") {
   const b = node("button", text, cls);
@@ -276,6 +308,7 @@ async function refresh(force = false) {
   expireLineConfirmLink();
   const previous = state;
   state = await api(returningFromLine ? "line/return-status" : "status");
+  if (state.lineOneButton) bindPinOnly(state.lineCheck);
   if (lineConfirmLink && !liveLineConfirmLink()) discardLineConfirmLink();
   if (state.lineDetected || !["location_selected", "line_pending"].includes(state.state)) {
     lineCode = null;
@@ -647,7 +680,10 @@ async function render() {
       const linkMissing = check.state === "link_missing";
       const sameBrowser = !linkMissing && check.state !== "browser_mismatch";
       const oneCard = state.lineOneButton && sameBrowser && !fromLink;
-      const pinOnly = oneCard && check.pinAvailable && Boolean(check.expiresAt) && check.expiresAt === pinOnlyExpiresAt;
+      const pinOnlyMatch = oneCard && check.pinAvailable && Boolean(check.expiresAt) && check.expiresAt === pinOnlyExpiresAt;
+      const pinOnly = pinOnlyMatch && !pinOnlyUnknown;
+      // A number-only send with an unknown result still replaced the earlier card.
+      const pinOnlyUnsure = pinOnlyMatch && pinOnlyUnknown;
       lineLimitNotice(check);
       if (linkMissing) {
         text("LINEは検出していますが、通知先の確認をやり直す必要があります。", "success");
@@ -663,12 +699,13 @@ async function render() {
       if (!sameBrowser) {
         text("設定を始めたブラウザへ戻ってください。そちらを使えない場合は、下の補助欄でコードを再発行し、LINEへ送り直してください。", "next-action");
       } else if (pending) {
-        text(oneCard
+        text(oneCard && !pinOnlyMatch
           ? "確認カードの送信状況を確認しています。届いたら、カードの「確認して登録画面へ進む」を押してください。"
           : "確認番号の送信状況を確認しています。届いた番号は、状況の更新後にこの画面へ入力できます。", "next-action");
       } else if (check.pinAvailable) {
         text(fromLink ? "内容を確認し、「通知先を確認して次へ」を押してください。リンクを開いただけでは、通知先は確定しません。"
           : pinOnly ? "次に：LINEに番号だけのメッセージを送りました。いちばん新しいメッセージの6桁を下に入力し、「確認する」を押してください。前に届いたカードのボタンは使えません。"
+          : pinOnlyUnsure ? "次に：番号だけのメッセージを送れたか確認できませんでした。LINEに番号が届いていれば、いちばん新しい6桁を下に入力し、「確認する」を押してください。届いていなければ「カードが届かない・期限が切れたとき」を開き、「確認カードをもう一度送る」を押してください。前に届いたカードのボタンは使えません。"
           : state.lineOneButton ? "次に：LINEに届いたカードの「確認して登録画面へ進む」を押してください。押せないときは、カードに書かれた6桁を下に入力して「確認する」を押してください。"
           : "次に：LINEに届いている6桁を入力し、「確認する」を押してください。", "next-action");
       } else if (!check.sendLimit) {
@@ -734,12 +771,16 @@ async function render() {
         // One-button mode: resend the same card type; a PIN-only send stays as a fallback.
         const primary = !check.pinAvailable && !pending;
         const resend = button("確認カードをもう一度送る", async () => {
+          forgetPinOnlyAttempt();
           try { await api("line/button", {}); rememberPinOnly(null); }
           catch (error) { await refresh(true); throw error; }
           await refresh(true);
         }, primary ? "" : "secondary");
         lockLineSend(resend, check, pending);
         const send = button("確認番号をLINEに送る", async () => {
+          // Mark the attempt first: a timeout or lost response after dispatch
+          // must not leave the guidance on the card this send invalidated.
+          startPinOnly(check.pinAvailable ? check.expiresAt : 0);
           try { rememberPinOnly((await api("line/test", {})).expiresAt); }
           catch (error) { await refresh(true); throw error; }
           await refresh(true);

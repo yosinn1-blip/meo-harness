@@ -181,6 +181,25 @@ test('original tab without the card link guides to the card, keeps PIN entry and
  expect(await resend.evaluate(b=>b.closest('details')===null&&!b.classList.contains('secondary'))).toBe(true);
  await screens(page,'onecard-expired');expect(app.pushes).toHaveLength(2);
 });
+test('FAQ recovery steps lead to the buttons the one-button screen shows, in the same order',async({page})=>{
+ await accepted(page);
+ const faq=await(await page.request.get(app.baseURL+'/self/help/faq')).text();
+ const recovery=faq.match(/<p>カードの期限が切れた場合は[^<]*<\/p>/)?.[0]??'';
+ const names=[...recovery.matchAll(/「([^」]+)」/g)].map(m=>m[1]);
+ expect(names.slice(0,4)).toEqual(['確認カードをもう一度送る','確認して登録画面へ進む','カードが届かない・期限が切れたとき','確認番号をLINEに送る']);
+ const section=page.locator('details',{has:page.locator('summary',{hasText:'カードが届かない・期限が切れたとき'})});
+ // Card still valid: both sends sit behind the named section.
+ await expect(section.getByRole('button',{name:'確認カードをもう一度送る',exact:true,includeHidden:true})).toHaveCount(1);
+ await expect(section.getByRole('button',{name:'確認番号をLINEに送る',exact:true,includeHidden:true})).toHaveCount(1);
+ // Card expired: FAQ step 1 is the visible main button outside the section.
+ await fixture(page,'advance',{ms:300001});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ const resend=page.getByRole('button',{name:'確認カードをもう一度送る',exact:true});await expect(resend).toBeVisible();await expect(resend).toBeEnabled();
+ expect(await resend.evaluate(b=>b.closest('details')===null)).toBe(true);
+ // FAQ fallback: open the named section, then the number-only send is there.
+ await section.locator('summary').click();
+ await expect(section.getByRole('button',{name:'確認番号をLINEに送る',exact:true})).toBeVisible();
+ await expect(section.getByRole('button',{name:'確認番号をLINEに送る',exact:true})).toBeEnabled();
+});
 test('one-button awaiting card names the one real card button',async({page})=>{
  await accepted(page);
  // Lose the delivery record inside the 20s automatic window: status reports the automatic card as awaiting.
@@ -206,4 +225,44 @@ test('number-only resend from the original tab guides to the newest six digits a
  await page.getByLabel('確認番号',{exact:true}).fill(pin);
  const [r]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/api/self/line/verify'),page.getByRole('button',{name:'確認する',exact:true}).click()]);expect(r.ok()).toBe(true);
  expect((await app.db.prepare('SELECT state FROM stores').first()).state).toBe('line_verified');expect(app.pushes).toHaveLength(2);
+});
+const unsureGuide='次に：番号だけのメッセージを送れたか確認できませんでした。LINEに番号が届いていれば、いちばん新しい6桁を下に入力し、「確認する」を押してください。届いていなければ「カードが届かない・期限が切れたとき」を開き、「確認カードをもう一度送る」を押してください。前に届いたカードのボタンは使えません。';
+for(const loss of ['LINE result unknown after dispatch','browser response lost after dispatch'])test('number-only resend with '+loss+' never points back to the invalidated card',async({page})=>{
+ const data=await accepted(page);
+ await fixture(page,'advance',{ms:60001});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ await expect(page.getByRole('button',{name:'確認番号をLINEに送る',exact:true,includeHidden:true})).toBeEnabled();
+ await page.locator('summary',{hasText:'カードが届かない・期限が切れたとき'}).click();
+ if(loss.startsWith('LINE'))await fixture(page,'scenario',{lineFailure:'unknown'});
+ // The server finishes the send, but the browser never sees the answer (timeout).
+ else await page.route('**/api/self/line/test',async route=>{await route.fetch();await route.abort('timedout');});
+ await page.getByRole('button',{name:'確認番号をLINEに送る',exact:true}).click();
+ await expect(page.getByText(unsureGuide,{exact:true})).toBeVisible();
+ expect(app.pushes).toHaveLength(2);const sent=app.pushes[1].messages[0];expect(sent.type).toBe('text');const pin=sent.text.match(/\d{6}/)[0];expect(pin).not.toBe(data.pin);
+ // Neither the invalidated card nor a claimed arrival is offered.
+ await expect(page.getByText('次に：LINEに届いたカードの「確認して登録画面へ進む」を押してください。',{exact:false})).toHaveCount(0);
+ await expect(page.getByText('確認カードの送信状況を確認しています。',{exact:false})).toHaveCount(0);
+ await expect(page.getByText('LINEに番号だけのメッセージを送りました。',{exact:false})).toHaveCount(0);
+ // The named recovery section and button are real on this screen.
+ const recovery=page.locator('details',{has:page.locator('summary',{hasText:'カードが届かない・期限が切れたとき'})});
+ await expect(recovery).toHaveCount(1);await expect(recovery.getByRole('button',{name:'確認カードをもう一度送る',exact:true,includeHidden:true})).toHaveCount(1);
+ await page.unrouteAll({behavior:'wait'});if(loss.startsWith('LINE'))await fixture(page,'scenario',{lineFailure:null});
+ // Survives a reload and a return through the old card link, storing no number.
+ await page.reload();await expect(page.getByText(unsureGuide,{exact:true})).toBeVisible();await noStoredPin(page,pin);
+ await page.goto(data.uri);await emptyPin(page);await expect(page.getByText(unsureGuide,{exact:true})).toBeVisible();await screens(page,'onecard-pin-only-unknown');
+ await page.getByLabel('確認番号',{exact:true}).fill(pin);
+ const [r]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/api/self/line/verify'),page.getByRole('button',{name:'確認する',exact:true}).click()]);expect(r.ok()).toBe(true);
+ expect((await app.db.prepare('SELECT state FROM stores').first()).state).toBe('line_verified');expect(app.pushes).toHaveLength(2);
+});
+test('a failed number-only send that never replaced the card keeps the card guidance',async({page})=>{
+ await accepted(page);
+ await fixture(page,'advance',{ms:60001});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ await expect(page.getByRole('button',{name:'確認番号をLINEに送る',exact:true,includeHidden:true})).toBeEnabled();
+ await page.locator('summary',{hasText:'カードが届かない・期限が切れたとき'}).click();
+ // Lost before reaching the server: the card's check is untouched and still usable.
+ await page.route('**/api/self/line/test',route=>route.abort('timedout'));
+ await page.getByRole('button',{name:'確認番号をLINEに送る',exact:true}).click();
+ await expect(page.getByText('次に：LINEに届いたカードの「確認して登録画面へ進む」を押してください。押せないときは、カードに書かれた6桁を下に入力して「確認する」を押してください。',{exact:true})).toBeVisible();
+ await expect(page.getByText(unsureGuide,{exact:true})).toHaveCount(0);expect(app.pushes).toHaveLength(1);
+ await page.unrouteAll({behavior:'wait'});await page.reload();
+ await expect(page.getByText('次に：LINEに届いたカードの「確認して登録画面へ進む」を押してください。押せないときは、カードに書かれた6桁を下に入力して「確認する」を押してください。',{exact:true})).toBeVisible();
 });
