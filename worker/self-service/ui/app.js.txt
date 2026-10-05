@@ -136,6 +136,19 @@ async function api(path, body) {
   if (!response.ok || !data.ok) throw data;
   return data;
 }
+// One-button mode: remember which check was sent as a number-only text, so the
+// guidance does not point at the card that this send invalidated. Only the
+// expiry timestamp is kept (never the number); a new card send replaces it.
+const PIN_ONLY_KEY = "meo-line-pin-only";
+let pinOnlyExpiresAt = null;
+try { pinOnlyExpiresAt = Number(sessionStorage.getItem(PIN_ONLY_KEY)) || null; } catch {}
+function rememberPinOnly(expiresAt) {
+  pinOnlyExpiresAt = expiresAt || null;
+  try {
+    if (pinOnlyExpiresAt) sessionStorage.setItem(PIN_ONLY_KEY, String(pinOnlyExpiresAt));
+    else sessionStorage.removeItem(PIN_ONLY_KEY);
+  } catch {}
+}
 function button(text, action, cls = "") {
   const b = node("button", text, cls);
   b.type = "button";
@@ -243,23 +256,12 @@ function oauthButton(label, intent, cls = "") {
   b.disabled = !challengeToken;
   return b;
 }
-// Set only by "別のGoogleアカウントで入り直す": the next first-time connect asks
-// Google to show the account chooser. Not a secret; cleared once used.
-const ACCOUNT_SWITCH_KEY = "meo-account-switch";
-function markAccountSwitch() {
-  try { sessionStorage.setItem(ACCOUNT_SWITCH_KEY, "1"); } catch {}
-}
-function accountSwitchRequested() {
-  try { return sessionStorage.getItem(ACCOUNT_SWITCH_KEY) === "1"; } catch { return false; }
-}
 async function google(intent) {
   if (!challengeToken) throw { code: "CHALLENGE_FAILED" };
   const token = challengeToken;
   clearChallenge();
   try {
-    const switchAccount = intent === "connect" && accountSwitchRequested();
-    const r = await api("google/start", { intent, challenge: token, ...(switchAccount ? { switchAccount: true } : {}) });
-    if (switchAccount) try { sessionStorage.removeItem(ACCOUNT_SWITCH_KEY); } catch {}
+    const r = await api("google/start", { intent, challenge: token });
     location.assign(r.authorizationUrl);
   } catch (error) {
     clearChallenge();
@@ -394,7 +396,6 @@ async function locations(cursor = null) {
           async () => {
             await api("logout", {});
             lineCode = null;
-            markAccountSwitch();
             location.assign("/start");
           },
           "secondary",
@@ -646,6 +647,7 @@ async function render() {
       const linkMissing = check.state === "link_missing";
       const sameBrowser = !linkMissing && check.state !== "browser_mismatch";
       const oneCard = state.lineOneButton && sameBrowser && !fromLink;
+      const pinOnly = oneCard && check.pinAvailable && Boolean(check.expiresAt) && check.expiresAt === pinOnlyExpiresAt;
       lineLimitNotice(check);
       if (linkMissing) {
         text("LINEは検出していますが、通知先の確認をやり直す必要があります。", "success");
@@ -666,6 +668,7 @@ async function render() {
           : "確認番号の送信状況を確認しています。届いた番号は、状況の更新後にこの画面へ入力できます。", "next-action");
       } else if (check.pinAvailable) {
         text(fromLink ? "内容を確認し、「通知先を確認して次へ」を押してください。リンクを開いただけでは、通知先は確定しません。"
+          : pinOnly ? "次に：LINEに番号だけのメッセージを送りました。いちばん新しいメッセージの6桁を下に入力し、「確認する」を押してください。前に届いたカードのボタンは使えません。"
           : state.lineOneButton ? "次に：LINEに届いたカードの「確認して登録画面へ進む」を押してください。押せないときは、カードに書かれた6桁を下に入力して「確認する」を押してください。"
           : "次に：LINEに届いている6桁を入力し、「確認する」を押してください。", "next-action");
       } else if (!check.sendLimit) {
@@ -731,20 +734,21 @@ async function render() {
         // One-button mode: resend the same card type; a PIN-only send stays as a fallback.
         const primary = !check.pinAvailable && !pending;
         const resend = button("確認カードをもう一度送る", async () => {
-          try { await api("line/button", {}); }
+          try { await api("line/button", {}); rememberPinOnly(null); }
           catch (error) { await refresh(true); throw error; }
           await refresh(true);
         }, primary ? "" : "secondary");
         lockLineSend(resend, check, pending);
         const send = button("確認番号をLINEに送る", async () => {
-          try { await api("line/test", {}); }
+          try { rememberPinOnly((await api("line/test", {})).expiresAt); }
           catch (error) { await refresh(true); throw error; }
           await refresh(true);
         }, "secondary");
         lockLineSend(send, check, pending);
         const again = node("details", undefined, "setup-recovery");
         again.append(node("summary", "カードが届かない・期限が切れたとき"),
-          node("p", "送り直すと、前のカードと番号は使えなくなります。新しい送信は回数に数えます。", "small"));
+          node("p", "送り直すと、前のカードと番号は使えなくなります。新しい送信は回数に数えます。", "small"),
+          node("p", "「確認番号をLINEに送る」は、カードではなく番号だけを送ります。届いた6桁を下に入力して「確認する」を押してください。", "small"));
         if (primary) root.append(resend);
         else again.append(resend);
         again.append(send);

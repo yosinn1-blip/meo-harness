@@ -41,7 +41,7 @@ export async function verifyGoogleIdToken(
     throw new SelfError("GOOGLE_IDENTITY_INVALID", 401);
   }
 }
-export async function startGoogle(ctx, request, { intent, challenge, switchAccount }) {
+export async function startGoogle(ctx, request, { intent, challenge }) {
   ensure(["connect", "login", "reconnect"].includes(intent), "INVALID_INTENT");
   const c = readSelfConfig(ctx.env);
   ensure(c.configured, "REGISTRATION_CLOSED", 503);
@@ -116,15 +116,12 @@ export async function startGoogle(ctx, request, { intent, challenge, switchAccou
     nonce,
     code_challenge: cc,
     code_challenge_method: "S256",
-    // The account chooser is shown only when the user asked to start over with
-    // another Google account. Reconnect must keep the same account; login stays silent.
+    // A first-time connect always shows the account chooser so the store's managing
+    // account can be picked. Reconnect must keep the same account; login stays silent.
     ...(intent !== "login"
       ? {
           access_type: "offline",
-          prompt:
-            intent === "connect" && switchAccount === true
-              ? "select_account consent"
-              : "consent",
+          prompt: intent === "connect" ? "select_account consent" : "consent",
         }
       : {}),
   }).toString();

@@ -190,3 +190,20 @@ test('one-button awaiting card names the one real card button',async({page})=>{
  await expect(page.getByText('確認カードの送信状況を確認しています。届いたカードの「確認して登録画面へ進む」を押してください。自動では再送しません。',{exact:true})).toBeVisible();
  await expect(page.getByText('1 このLINEで確認',{exact:false})).toHaveCount(0);
 });
+test('number-only resend from the original tab guides to the newest six digits and verifies by manual entry',async({page})=>{
+ const data=await accepted(page);
+ await fixture(page,'advance',{ms:60001});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ await expect(page.getByRole('button',{name:'確認番号をLINEに送る',exact:true,includeHidden:true})).toBeEnabled();
+ await page.locator('summary',{hasText:'カードが届かない・期限が切れたとき'}).click();
+ await expect(page.getByText('「確認番号をLINEに送る」は、カードではなく番号だけを送ります。届いた6桁を下に入力して「確認する」を押してください。',{exact:true})).toBeVisible();
+ const [s]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/api/self/line/test'),page.getByRole('button',{name:'確認番号をLINEに送る',exact:true}).click()]);expect(s.ok()).toBe(true);
+ expect(app.pushes).toHaveLength(2);const sent=app.pushes[1].messages[0];expect(sent.type).toBe('text');const pin=sent.text.match(/\d{6}/)[0];expect(pin).not.toBe(data.pin);
+ const guide='次に：LINEに番号だけのメッセージを送りました。いちばん新しいメッセージの6桁を下に入力し、「確認する」を押してください。前に届いたカードのボタンは使えません。';
+ await expect(page.getByText(guide,{exact:true})).toBeVisible();
+ await expect(page.getByText('次に：LINEに届いたカードの「確認して登録画面へ進む」を押してください。',{exact:false})).toHaveCount(0);
+ // The guidance survives a reload of the original tab; the stored marker is only an expiry time.
+ await page.reload();await expect(page.getByText(guide,{exact:true})).toBeVisible();await noStoredPin(page,pin);await screens(page,'onecard-pin-only');
+ await page.getByLabel('確認番号',{exact:true}).fill(pin);
+ const [r]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/api/self/line/verify'),page.getByRole('button',{name:'確認する',exact:true}).click()]);expect(r.ok()).toBe(true);
+ expect((await app.db.prepare('SELECT state FROM stores').first()).state).toBe('line_verified');expect(app.pushes).toHaveLength(2);
+});

@@ -199,10 +199,9 @@ test("zero locations lets the owner start over with another Google account and o
     page.waitForRequest((r) => r.url().endsWith("/api/self/google/start")),
     first.click(),
   ]);
-  expect(start.postDataJSON()).toMatchObject({ intent: "connect", switchAccount: true });
+  expect(start.postDataJSON()).toMatchObject({ intent: "connect" });
   await expect(page.getByRole("heading", { name: "架空Google認可画面" })).toBeVisible();
   expect(new URL(page.url()).searchParams.get("prompt")).toBe("select_account consent");
-  expect(await page.evaluate(() => sessionStorage.getItem("meo-account-switch"))).toBeNull();
   expect(app.writes).toEqual([]);
 });
 test("denied Google authorization returns without secrets in URL", async ({
@@ -559,10 +558,9 @@ test("first-time and registered entry choose their respective Google permission 
     first.click(),
   ]);
   expect(connectRequest.postDataJSON().intent).toBe("connect");
-  expect(connectRequest.postDataJSON().switchAccount).toBeUndefined();
   await expect(page.getByRole("heading", { name: "架空Google認可画面" })).toBeVisible();
   expect(new URL(page.url()).searchParams.get("scope")).toContain("business.manage");
-  expect(new URL(page.url()).searchParams.get("prompt")).toBe("consent");
+  expect(new URL(page.url()).searchParams.get("prompt")).toBe("select_account consent");
   await page.getByRole("button", { name: "許可しない", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("権限が許可されません");
   await expect(existing).toBeEnabled();
