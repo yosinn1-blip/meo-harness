@@ -1,4 +1,3 @@
-import quickstart from "../../docs/quickstart.md";
 import aiSetup from "../../docs/ai-setup.md";
 import selfHosting from "../../docs/self-hosting.md";
 import qrcode from "qrcode-generator";
@@ -12,16 +11,17 @@ import script from "./ui/app.js.txt";
 import css from "./ui/style.css";
 import faq from "./ui/faq.html";
 import report from "./ui/report.html";
+import quickstartPage from "./ui/quickstart.html";
 import reportScript from "./ui/report.js.txt";
 export function serveSelfPage(request, ctx = { env: {} }) {
   const path = new URL(request.url).pathname;
   let body, type;
   const helps = {
-    "/self/help/quickstart": quickstart,
     "/self/help/ai-setup": aiSetup,
     "/self/help/self-hosting": selfHosting,
   };
-  const supportPage = path === '/self/help/faq' || path === '/self/help/report';
+  const supportPages = { '/self/help/faq': faq, '/self/help/report': report, '/self/help/quickstart': quickstartPage };
+  const supportPage = Object.hasOwn(supportPages, path);
   const verificationFile = ctx.env.SELF_GOOGLE_SITE_VERIFICATION_FILE;
   if (
     typeof verificationFile === 'string' &&
@@ -37,7 +37,7 @@ export function serveSelfPage(request, ctx = { env: {} }) {
     body = homeCss;
     type = "text/css; charset=utf-8";
   } else if (supportPage) {
-    body = path === '/self/help/faq' ? faq : report;
+    body = supportPages[path];
     type = 'text/html; charset=utf-8';
   } else if (path === '/self/assets/report.js') {
     body = reportScript;

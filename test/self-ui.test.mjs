@@ -115,7 +115,7 @@ test("all published help links resolve to same-origin human-readable guidance", 
 });
 
 test('support pages work without login or database and never echo query secrets', async () => {
-  for (const path of ['/self/help/faq', '/self/help/report']) {
+  for (const path of ['/self/help/faq', '/self/help/report', '/self/help/quickstart']) {
     const response = await worker.fetch(new Request('https://meo.test' + path + '?code=private-code-fixture&token=private-token-fixture'), {
       SELF_DB: { prepare() { throw new Error('Support must not use the DB'); } },
     }, {});
@@ -215,4 +215,29 @@ test('home supplies a keyboard skip destination and labels the illustrative revi
   assert.ok(figure, 'illustrative review belongs to a figure');
   assert.match(figure, /<figcaption(?:\s[^>]*)?>[\s\S]*画面はイメージです[\s\S]*<\/figcaption>/);
   assert.match(figure, /架空/);
+});
+
+test('quickstart is a mobile HTML guide that uses the printed button names', async () => {
+  const response = await worker.fetch(new Request('https://meo.test/self/help/quickstart'), {}, {});
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8');
+  const html = await response.text();
+  assert.match(html, /<meta name="viewport" content="width=device-width,initial-scale=1" \/>/);
+  assert.doesNotMatch(html, /<script/);
+  for (const text of ['初めての方：Googleでお店を接続', 'この店舗を使う', 'LINEを開いてコードを送る', '利用を開始する', '「送信」', '「編集する」', '確認して登録画面へ進む', '通知先を確認して次へ'])
+    assert.ok(html.includes(text), text);
+  for (const text of ['1 このLINEで確認', 'ローカル', '未公開', 'D1', 'スキップ', '承認して送信'])
+    assert.ok(!html.includes(text), text);
+  const aiSetup = await worker.fetch(new Request('https://meo.test/self/help/ai-setup'), {}, {});
+  assert.equal(aiSetup.headers.get('Content-Type'), 'text/plain; charset=utf-8');
+});
+
+test('FAQ keeps stable, unique anchors for linked questions', async () => {
+  const html = await (await worker.fetch(new Request('https://meo.test/self/help/faq'), {}, {})).text();
+  const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(m => m[1]);
+  assert.equal(new Set(ids).size, ids.length, 'ids are unique');
+  for (const id of ['replies', 'not-posted', 'expired'])
+    assert.equal(ids.filter(x => x === id).length, 1, id);
+  const summaries = [...html.matchAll(/<summary>([\s\S]*?)<\/summary>/g)].map(m => m[1]).join('\n');
+  assert.doesNotMatch(summaries, /承認したのに|承認ボタンの期限/);
 });
