@@ -26,6 +26,8 @@ node scripts/check-self-release.mjs --evidence output/self-service/release-evide
 git diff --check
 ```
 
+本番へ反映した直後に GET /api/self/status を開き、lineButtonConfirm・lineAutoButton・lineOneButton が true、lineAutoPin が false であることを確かめる。dry-run と本番モジュールの byte 比較では vars の違いを検出できない。
+
 Nodeテスト、実D1エンジンの隔離テスト、Chrome for Testingの専用プロファイルを分けて検証します。E2EはGoogle/LINE/AIをすべて架空プロバイダへ差し替え、予想外の外部通信0件を要求します。架空口コミへのローカルPUT成功は実Googleへの投稿成功を意味しません。公開bundleにはfixture route、架空challenge、test用鍵、認証迂回を含めないことを確認します。
 
 証跡は実行日時、対象commit、コマンド、件数、fail/skip、元終了コードだけを残し、秘密や本文は残しません。下記gateは明示的なbooleanのtrueだけを採用します。ファイルなし、false、不明はblocked（終了コード1）が正しい結果です。チェッカーは読取専用で、deployやSecret変更は行いません。

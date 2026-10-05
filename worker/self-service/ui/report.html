@@ -41,8 +41,8 @@
           <div class="report-row">
             <div><label for="occurred">発生した日時（任意）</label><input id="occurred" type="datetime-local" /></div>
             <div>
-              <label for="screen">どの画面ですか</label>
-              <select id="screen" required>
+              <label for="screen">どの画面ですか（任意）</label>
+              <select id="screen">
                 <option value="">選んでください</option>
                 <option value="start">利用開始・接続の画面</option>
                 <option value="account">アカウント画面</option>
@@ -52,9 +52,9 @@
               </select>
             </div>
           </div>
-          <label for="report-steps">行った操作</label>
-          <textarea id="report-steps" rows="3" maxlength="600" required placeholder="例：アカウント画面で「確認番号をLINEに送る」を押した" aria-describedby="steps-hint"></textarea>
-          <p class="field-hint" id="steps-hint">手順がわからない場合は「わからない」で構いません。600文字まで。</p>
+          <label for="report-steps">行った操作（任意）</label>
+          <textarea id="report-steps" rows="3" maxlength="600" placeholder="例：LINEで「送信」を押した" aria-describedby="steps-hint"></textarea>
+          <p class="field-hint" id="steps-hint">分かる範囲で構いません。600文字まで。</p>
           <label for="description">起きたこと・相談したいこと</label>
           <textarea id="description" rows="5" maxlength="1000" required placeholder="例：番号が届かず、画面に「送信結果を確認できません」と出た" aria-describedby="description-hint"></textarea>
           <p class="field-hint" id="description-hint">期待していた動き、表示されたエラー、試したことなど。1000文字まで。</p>

@@ -35,11 +35,14 @@ migrations_dir = "migrations"
 VERSION = "0.1.0"
 SELF_REGISTRATION_ENABLED = "true"
 SELF_PROCESSING_ENABLED = "true"
-SELF_LINE_BUTTON_CONFIRM_ENABLED = "false"
-SELF_LINE_AUTO_BUTTON_ENABLED = "false"
+SELF_LINE_BUTTON_CONFIRM_ENABLED = "true"
+SELF_LINE_AUTO_BUTTON_ENABLED = "true"
+SELF_LINE_ONE_BUTTON_ENABLED = "true"
+SELF_LINE_AUTO_PIN_ENABLED = "false"
 SELF_PUBLIC_ORIGIN = "https://meo-harness.yosinn1.workers.dev"
 TURNSTILE_SITE_KEY = "0x4AAAAAAFE6uTVTTIAlwcWr"
-# 本人限定の接続確認。許可対象はSecret SELF_PILOT_OWNER_SHA256。一般受付/処理は閉鎖。
+# Secret SELF_PILOT_OWNER_SHA256 を置くと、受付と処理を止めた本人限定モードになる。本番では置かない。
+# SELF_LINE_CHECK_DAILY_BYPASS_ENABLED は運営者本人だけの一時設定なので、ここには書かない。ダッシュボードで管理し、deploy の --keep-vars で残す。
 SELF_MAX_ACTIVE_STORES = "10"
 SELF_MONTHLY_DRAFT_LIMIT = "30"
 SELF_MONTHLY_PUSH_LIMIT = "150"
