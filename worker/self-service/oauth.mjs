@@ -116,8 +116,13 @@ export async function startGoogle(ctx, request, { intent, challenge }) {
     nonce,
     code_challenge: cc,
     code_challenge_method: "S256",
+    // A first-time connect always shows the account chooser so the store's managing
+    // account can be picked. Reconnect must keep the same account; login stays silent.
     ...(intent !== "login"
-      ? { access_type: "offline", prompt: "consent" }
+      ? {
+          access_type: "offline",
+          prompt: intent === "connect" ? "select_account consent" : "consent",
+        }
       : {}),
   }).toString();
   return { authorizationUrl: url.toString() };

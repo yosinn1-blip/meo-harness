@@ -23,7 +23,7 @@ async function codeReady(page){
  await page.setViewportSize({width:375,height:812});await page.goto(app.baseURL+'/start');
  await page.getByRole('button',{name:'初めての方：Googleでお店を接続',exact:true}).click();
  await page.getByRole('button',{name:'架空Googleで許可',exact:true}).click();await page.getByRole('button',{name:'この店舗を使う',exact:true}).click();
- await expect(page.getByText('2. LINEのカードで確認して戻る',{exact:true})).toBeVisible();
+ await expect(page.getByText('送ったら、LINEのカードで確認して戻る',{exact:true})).toBeVisible();
  return page.getByTestId('line-code').textContent();
 }
 async function accept(page){const code=await codeReady(page);await fixture(page,'line',{code,userId:'line-fixture'});await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));

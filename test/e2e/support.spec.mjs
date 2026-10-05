@@ -78,6 +78,8 @@ test('mobile report requires input and consent; clipboard failure leaves selecta
   await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { value: { writeText: async () => { throw new Error('fixture denied'); } } }));
   await page.goto(app.baseURL + '/self/help/report');
   await expect(page.getByLabel('行った操作')).toHaveCSS('padding-left', '12px');
+  // The consent tap-target rule is scoped to the start screen; report keeps its top alignment.
+  await expect(page.locator('.report-consent')).toHaveCSS('align-items', 'flex-start');
   await page.getByRole('button', { name: 'メール内容を確認する', exact: true }).click();
   await expect(page.getByRole('link', { name: 'メールアプリを開く', exact: true })).toBeHidden();
   await fillReport(page);
