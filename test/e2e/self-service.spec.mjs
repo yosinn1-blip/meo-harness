@@ -308,7 +308,7 @@ test("multiple stores, long Japanese review, wrong LINE actor and approval use o
   });
   expect(app.writes).toHaveLength(1);
   expect(app.feedback.at(-1)?.messages[0]?.text).toContain(
-    "Googleへの投稿を確認しました",
+    "返信がGoogleに投稿されたことを確認しました",
   );
   await page.goto(app.baseURL + "/account");
   await expect(

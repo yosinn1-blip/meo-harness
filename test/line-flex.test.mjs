@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReviewBubble, buildFlexPayload } from '../src/line-flex.mjs';
+import { buildReviewBubble, buildFlexPayload, SEND_DISPLAY_TEXT, EDIT_DISPLAY_TEXT } from '../src/line-flex.mjs';
 
 const sampleReview = { star: 4, text: '良いサービスでした', name: '田中太郎', draft: 'ありがとうございます！' };
 
@@ -108,4 +108,77 @@ test('self-service never approves a truncated draft and includes private full-re
  const bubble=buildReviewBubble({replyId:'ss_test',review:{star:5,text:'長'.repeat(1100),draft:'😀'.repeat(800),fullTextUrl:'https://meo.test/account/replies/ss_test'}});
  assert.equal(JSON.stringify(bubble).includes('approve:ss_test'),false);
  assert.ok(JSON.stringify(bubble).includes('/account/replies/ss_test'));
+});
+
+test('LINE-03: notification text and expiry note have readable colors and size', () => {
+  const bubble = buildReviewBubble({ replyId: 'ss_1', review: sampleReview, editable: true });
+  assert.equal(bubble.header.contents[0].color, '#14303F');
+  const draft = bubble.body.contents[2].contents;
+  assert.equal(draft[0].color, '#666666');
+  assert.equal(draft[2].color, '#666666');
+  assert.equal(draft[2].size, 'sm');
+  assert.equal(draft[2].text, 'この返信案は7日で消えます。何も押さなければ投稿されません。');
+  const payload = buildFlexPayload({ to: 'U123', reviews: Array.from({length: 53}, () => sampleReview) });
+  assert.equal(payload.messages.at(-1).contents.contents.at(-1).body.contents[0].color, '#666666');
+});
+
+test('LINE-11: star-only reviews have a useful placeholder, not empty quotes', () => {
+  for (const text of ['', '   ']) {
+    const b = buildReviewBubble({ review: { ...sampleReview, text } });
+    assert.equal(b.body.contents[0].contents[1].text, '（コメントなし・星だけの口コミです）');
+  }
+});
+test('LINE-11: review dates use JST, prefer updates and omit invalid dates', () => {
+  for (const [dates, want] of [
+    [{createTime: '2026-10-04T16:00:00Z'}, '2026/10/05 の口コミ'],
+    [{createTime: '2026-10-04T16:00:00Z', updateTime: '2026-10-06T00:00:00Z'}, '2026/10/06 の口コミ'],
+    [{}, undefined], [{createTime: 'invalid'}, undefined],
+    [{createTime: '2026-10-04T16:00:00Z', updateTime: 'invalid'}, undefined],
+  ]) {
+    const fields = buildReviewBubble({review: {...sampleReview, ...dates}}).body.contents[0].contents;
+    assert.equal(fields[2]?.text, want);
+    assert.equal(fields.length, want ? 3 : 2);
+    if (want) assert.equal(fields[2].color, '#666666');
+  }
+});
+
+test('LINE-12: preview is visually distinct while retaining revision-safe actions', () => {
+  const bubble = buildReviewBubble({ replyId: 'ss_1', review: sampleReview, bizName: '長い店名', editable: true, rev: 2, variant: 'preview' });
+  assert.equal(bubble.header.contents[0].text, '✏️ 編集した返信案の確認（長い店名）');
+  assert.equal(bubble.header.backgroundColor, '#5B6FB5');
+  assert.equal(bubble.header.contents[0].color, '#ffffff');
+  assert.equal(bubble.header.contents[0].wrap, true);
+  assert.equal(bubble.body.contents[2].contents[0].text, '編集した返信案');
+  assert.deepEqual(bubble.footer.contents.map(b => b.action.label), ['送信', '編集する']);
+  assert.equal(bubble.footer.contents[0].action.data, 'approve:ss_1:r2');
+  const notify = buildFlexPayload({to: 'U123', reviews: [sampleReview]}).messages[0].contents.contents[0];
+  assert.equal(notify.header.contents[0].text, '🔔 新着クチコミ');
+  assert.equal(notify.header.backgroundColor, '#27ACB2');
+});
+
+test('LINE-02: tap targets are md and long-review links do not crowd actions', () => {
+  const b = buildReviewBubble({replyId: 'ss_1', review: {...sampleReview, text: '長'.repeat(1100), fullTextUrl: 'https://meo.test/account/replies/ss_1'}, editable: true});
+  assert.deepEqual(b.footer.contents.map(x => x.action.label), ['送信', '編集する']);
+  assert.deepEqual(b.footer.contents.map(x => x.height), ['md', 'md']);
+  assert.deepEqual(b.footer.contents.map(x => x.style), ['primary', 'secondary']);
+  assert.equal(b.footer.layout, 'horizontal');
+  assert.equal(b.footer.spacing, 'md');
+  assert.equal(b.body.contents.at(-1).action.label, '全文を確認');
+  assert.equal(b.body.contents.at(-1).action.uri, 'https://meo.test/account/replies/ss_1');
+  const longDraft = buildReviewBubble({replyId: 'ss_1', review: {...sampleReview, draft: 'あ'.repeat(1501), fullTextUrl: 'https://meo.test/account/replies/ss_1'}, editable: true});
+  assert.deepEqual(longDraft.footer.contents.map(x => x.action.label), ['全文を確認']);
+  assert.doesNotMatch(JSON.stringify(longDraft), /approve:/);
+  assert.equal(buildReviewBubble({replyId: 'old', review: sampleReview}).footer.contents[1].height, 'md');
+  assert.equal(buildReviewBubble({review: sampleReview}).footer.contents[0].height, 'md');
+});
+
+test('LINE-08: postbacks acknowledge taps without claiming posting succeeded', () => {
+  const b = buildReviewBubble({replyId: 'ss_1', review: sampleReview, editable: true});
+  assert.deepEqual(b.footer.contents.map(x => x.action.displayText), ['「送信」を押しました', '「編集する」を押しました']);
+  assert.deepEqual([SEND_DISPLAY_TEXT, EDIT_DISPLAY_TEXT], ['「送信」を押しました', '「編集する」を押しました']);
+  // 名前・順番・色は印刷済みチラシと同じ（送信=primary 左、編集する=secondary 右）
+  assert.deepEqual(b.footer.contents.map(x => [x.action.label, x.style, x.action.data]), [['送信', 'primary', 'approve:ss_1'], ['編集する', 'secondary', 'edit:ss_1']]);
+  for (const x of b.footer.contents) assert.ok(x.action.displayText.length <= 300);
+  assert.equal(buildReviewBubble({replyId:'old',review:sampleReview}).footer.contents[1].action.displayText, undefined);
+  assert.equal(buildReviewBubble({review:sampleReview}).footer.contents[0].action.displayText, undefined);
 });

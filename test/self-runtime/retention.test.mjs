@@ -168,3 +168,14 @@ test('unfinished user identities expire without removing live sessions, OAuth or
   await purgeExpired(ctx);
   assert.deepEqual((await db.prepare('SELECT sub FROM users ORDER BY sub').all()).results.map(r=>r.sub),['alice']);
 });
+
+test('LINE-05: edit expiry notices retain rows for two hours, then purge', async t => {
+  const {db} = await withD1(t); await applySchema(db);
+  const ctx = createSelfContext(fixtureEnv(db), {now: () => now});
+  await seedStore(ctx);
+  for (const [id, expires] of [['live', now+1], ['recent', now-1], ['inside', now-2*3600000+1], ['boundary', now-2*3600000], ['old', now-2*3600000-1]])
+    await db.prepare('INSERT INTO line_edits VALUES (?,?,?)').bind(id,'ss_r',expires).run();
+  await purgeExpired(ctx);
+  const rows = (await db.prepare('SELECT line_user_id FROM line_edits ORDER BY line_user_id').all()).results;
+  assert.deepEqual(rows.map(x => x.line_user_id), ['inside','live','recent']);
+});
