@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildWorker } from "../scripts/build-self-test.mjs";
-import { buildReviewBubble } from "../src/line-flex.mjs";
+import { buildReviewBubble, SEND_DISPLAY_TEXT } from "../src/line-flex.mjs";
 const compiled = await buildWorker();
 const worker = (await import(compiled)).default;
 const verificationFile = 'google0123456789abcdef.html';
@@ -249,7 +249,9 @@ test('home preview card mirrors the real LINE review card wording', async () => 
   assert.ok(figure.includes(`<p class="fine">${notice}</p>`), notice);
   assert.ok(figure.includes('<p class="label">返信案</p>'));
   assert.match(figure, /<p class="review">「[^<]+」<\/p>/);
-  assert.doesNotMatch(figure, /bubble-me|AIの返信案|Googleへの投稿を確認しました/);
+  assert.doesNotMatch(figure, /AIの返信案|Googleへの投稿を確認しました/);
+  // LINE shows the postback displayText as the owner's bubble, so the preview mirrors it.
+  assert.ok(figure.includes(`<p class="bubble-me">${SEND_DISPLAY_TEXT}</p>`), SEND_DISPLAY_TEXT);
   assert.ok(figure.includes('返信がGoogleに投稿されたことを確認しました。'));
   const actions = figure.match(/<div class="card-actions">([\s\S]*?)<\/div>/)?.[1] ?? '';
   assert.match(actions, /chip-send">送信<\/span>[\s\S]*chip-edit">編集する<\/span>/);
