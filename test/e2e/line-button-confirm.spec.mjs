@@ -59,6 +59,7 @@ for(const buttonConfirm of [true,false]) test('original browser after link reten
  await expect(page.getByText('設定を始めたブラウザへ戻ってください。そちらを使えない場合は、下の補助欄でコードを再発行し、LINEへ送り直してください。',{exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:sendName,exact:true})).toHaveCount(0);
  await expect(page.getByLabel('確認番号',{exact:true})).toHaveCount(0);
+ await page.locator('#setup-account-actions > summary').click();
  await expect(page.getByRole('button',{name:'接続を切断',exact:true})).toBeVisible();
  await page.reload();await expect(page.getByRole('button',{name:'LINEの登録コードを再発行',exact:true})).toBeVisible();
  expect(await snapshot()).toBe(before);expect(app.pushes).toHaveLength(0);

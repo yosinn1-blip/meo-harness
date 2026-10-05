@@ -269,8 +269,14 @@ async function refresh(force = false) {
   const pinEntry = !lineConfirmLinkFresh && oldPin && state.lineCheck?.pinAvailable && previous?.lineCheck?.pinAvailable &&
     previous.store?.id === state.store?.id && previous.lineCheck.expiresAt === state.lineCheck.expiresAt
     ? {value:oldPin.value,focused:document.activeElement===oldPin,start:oldPin.selectionStart,end:oldPin.selectionEnd} : null;
+  // Status polling must not collapse account controls while they are in use.
+  // Keep this only within the same step/store; consent is never persisted.
+  const accountActionsOpen = previous?.state === state.state && previous?.store?.id === state.store?.id &&
+    document.querySelector("#setup-account-actions")?.open;
   rendered = linkFingerprint;
   await render();
+  const accountActions = document.querySelector("#setup-account-actions");
+  if (accountActionsOpen && accountActions) accountActions.open = true;
   lineConfirmLinkFresh = false;
   const currentPin = document.querySelector("#pin");
   if (pinEntry && currentPin) {
@@ -539,6 +545,7 @@ async function render() {
           };
           root.append(open);
           text("コードはLINEの入力欄に入ります。自動送信はされません。", "small");
+          text("初回は友だち追加の画面が出ます。追加したら、この登録画面へ戻って上のLINEボタンをもう一度押してください。", "small");
         } else text("下の補助欄でコードをコピーし、MEO HarnessのLINEトークへ送ってください。");
         text("登録コードは15分間有効です。", "small");
         root.append(node("h3", state.lineAutoButton ? "2. LINEのカードで確認して戻る" : state.lineAutoPin ? "2. LINEの6桁を読んで、この画面へ戻る" : "2. この画面へ戻る"));
@@ -548,7 +555,7 @@ async function render() {
         else if (state.lineAutoPin) text("送信後はLINEに届く6桁の番号を読み、この登録画面へ戻ってください。", "next-action");
         root.append(lineReturnHelp());
         text(state.lineAutoButton
-          ? state.lineOneButton ? "登録コードを送ると、1ボタンの確認カードを自動で1通送ります。「確認して登録画面へ進む」を押し、戻った画面で「通知先を確認して次へ」を押してください。カードは5分間有効です。リンクは他の人へ転送しないでください。" : "登録コードを送ると、確認カードを自動で1通送ります。1で確認してから2で元のブラウザへ戻り、「通知先を確認して次へ」を押してください。カードは5分間有効です。届かない・期限切れの場合は、この元画面で状況を確認して明示的に送り直せます。"
+          ? state.lineOneButton ? "戻った元のブラウザで「通知先を確認して次へ」を押してください。カードは5分間有効です。リンクは他の人へ転送しないでください。" : "登録コードを送ると、確認カードを自動で1通送ります。1で確認してから2で元のブラウザへ戻り、「通知先を確認して次へ」を押してください。カードは5分間有効です。届かない・期限切れの場合は、この元画面で状況を確認して明示的に送り直せます。"
           : state.lineAutoPin
           ? "LINEに届いた6桁をこの画面へ入力します。番号は5分間有効です。届かない場合も、この画面で送信状況を確認できます。"
           : state.lineButtonConfirm
@@ -557,7 +564,7 @@ async function render() {
         const help = node("details", undefined, "setup-recovery");
         help.open = !chat;
         help.append(node("summary", "LINEが開かない・友だち追加・PCから登録する方"));
-        help.append(node("p", "友だち追加の画面が出たらMEO Harnessを追加し、この登録画面へ戻って上のLINEボタンをもう一度押してください。ブロック中は解除してください。", "small"));
+        help.append(node("p", "MEO Harnessをブロック中の場合は解除してください。", "small"));
         help.append(node("p", "LINEが未インストールの場合は案内に沿ってインストールし、同じブラウザの登録タブへ戻ります。コードの期限が切れたら再発行してください。", "small"));
         help.append(node("p", "PCからの登録や、コードが入力されない場合は、下のコードをコピーしてLINEのMEO Harnessトークへ貼り付け、送信します。", "small"));
         const c = node("output", lineCode, "code");
@@ -580,10 +587,6 @@ async function render() {
         text("中断・画面更新でコードが消えた場合は、下のボタンで新しいコードを表示します。前のコードは使えなくなります。", "small");
         root.append(button("LINEの登録コードを表示", code));
       }
-      root.append(
-        button("LINEの検出状態を更新", () => refresh(true), "secondary"),
-      );
-      text("通常は自動で検出します。画面が変わらないときだけ、検出状態を更新してください。", "small");
     } else {
       const check = state.lineCheck ?? { state: "idle", pinAvailable: false };
       const pending = ["awaiting", "preparing", "sending"].includes(check.state);
@@ -702,6 +705,17 @@ async function render() {
     const checkbox = node("input");
     checkbox.type = "checkbox";
     checkbox.id = "terms";
+    const termsError = node("p", undefined, "field-error");
+    termsError.id = "terms-error";
+    termsError.setAttribute("role", "alert");
+    termsError.hidden = true;
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        termsError.hidden = true;
+        checkbox.removeAttribute("aria-invalid");
+        checkbox.removeAttribute("aria-describedby");
+      }
+    });
     label.append(checkbox, document.createTextNode("利用条件を確認しました"));
     const policies = node("p", undefined, "small");
     for (const [title, path] of [
@@ -717,8 +731,13 @@ async function render() {
     root.append(
       policies,
       label,
+      termsError,
       button("利用を開始する", async () => {
         if (!checkbox.checked) {
+          termsError.textContent = "利用条件を確認し、チェックを入れてください。";
+          termsError.hidden = false;
+          checkbox.setAttribute("aria-invalid", "true");
+          checkbox.setAttribute("aria-describedby", termsError.id);
           checkbox.focus();
           return;
         }
@@ -807,11 +826,19 @@ async function render() {
       "small",
     );
   if (state.state !== "anonymous") {
+    const ordinarySetup = !state.pilotMode && state.registrationAllowed &&
+      ["google_connected", "location_selected", "line_pending", "line_verified", "ready"].includes(state.state);
+    const accountActions = ordinarySetup ? node("details", undefined, "setup-recovery") : root;
+    if (ordinarySetup) {
+      accountActions.id = "setup-account-actions";
+      accountActions.append(node("summary", "接続の切断・ログアウト"));
+      root.append(accountActions);
+    }
     if (!["active", "paused"].includes(state.state))
-      root.append(
+      accountActions.append(
         button("接続を切断", () => dangerConfirm("disconnect"), "danger"),
       );
-    root.append(
+    accountActions.append(
       button(
         "ログアウト",
         async () => {
@@ -823,6 +850,8 @@ async function render() {
       ),
     );
   }
+  if (["location_selected", "line_pending"].includes(state.state) && !state.lineDetected)
+    text("通常は自動で検出します。画面が変わらないときだけ、状態を更新してください。", "small");
   root.append(button("状態を更新", () => refresh(true), "secondary"));
   if (state.notice) showError({ code: state.notice });
 }

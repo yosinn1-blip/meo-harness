@@ -72,7 +72,7 @@ async function onboard(page) {
     .click();
   const code = await page.getByTestId("line-code").textContent();
   await fixture(page, "line", { code, userId: "line-fixture" });
-  await page.getByRole("button", { name: "LINEの検出状態を更新" }).click();
+  await page.getByRole("button", { name: "状態を更新" }).click();
   await sendPin(page);
   const pin = (await (await fixture(page, "pin")).json()).pin;
   await page.getByLabel("確認番号", { exact: true }).fill(pin);
@@ -243,7 +243,7 @@ test("expired PIN refuses activation and provides resend", async ({ page }) => {
   await page.getByRole("button", { name: "この店舗を使う" }).click();
   const code = await page.getByTestId("line-code").textContent();
   await fixture(page, "line", { code, userId: "line-fixture" });
-  await page.getByRole("button", { name: "LINEの検出状態を更新" }).click();
+  await page.getByRole("button", { name: "状態を更新" }).click();
   await sendPin(page);
   const pin = (await (await fixture(page, "pin")).json()).pin;
   await fixture(page, "advance", { ms: 300000 });
@@ -347,7 +347,7 @@ test("LINE shared provider quota exhaustion never sends a confirmation", async (
   await page.getByRole("button", { name: "この店舗を使う" }).click();
   const code = await page.getByTestId("line-code").textContent();
   await fixture(page, "line", { code, userId: "line-fixture" });
-  await page.getByRole("button", { name: "LINEの検出状態を更新" }).click();
+  await page.getByRole("button", { name: "状態を更新" }).click();
   await fixture(page, "scenario", { consumed: 200 });
   await page.getByRole("button", { name: "確認番号をLINEに送る" }).click();
   await expect(page.getByRole("alert")).toContainText("利用枠");
@@ -383,6 +383,7 @@ test("unfinished Google connection exposes disconnect before store selection", a
   page,
 }) => {
   await connect(page);
+  await page.locator("#setup-account-actions > summary").click();
   await page.getByRole("button", { name: "接続を切断" }).click();
   await page.getByRole("button", { name: "切断してデータを削除" }).click();
   await expect(
@@ -518,7 +519,7 @@ test("LINE recovery reissues a code and requires confirmation of the new notific
   await page.getByRole("button", { name: "この店舗を使う" }).click();
   const originalCode = await page.getByTestId("line-code").textContent();
   await fixture(page, "line", { code: originalCode, userId: "line-fixture" });
-  await page.getByRole("button", { name: "LINEの検出状態を更新" }).click();
+  await page.getByRole("button", { name: "状態を更新" }).click();
   await sendPin(page);
   const oldPin = (await (await fixture(page, "pin")).json()).pin;
   await page.getByText("通知先のLINEを変更する・登録コードを送り直す", { exact: true }).click();
@@ -527,7 +528,7 @@ test("LINE recovery reissues a code and requires confirmation of the new notific
   expect(newCode).not.toBe(originalCode);
   expect(app.pushes).toHaveLength(1);
   await fixture(page, "line", { code: newCode, userId: "line-other" });
-  await page.getByRole("button", { name: "LINEの検出状態を更新" }).click();
+  await page.getByRole("button", { name: "状態を更新" }).click();
   await page.getByLabel("確認番号", { exact: true }).fill(oldPin);
   await page.getByRole("button", { name: "確認する", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("確認番号が違うか");

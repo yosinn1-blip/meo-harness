@@ -49,6 +49,32 @@ for(const width of [320,375,1280])test(`human send instruction is prominent besi
  await notReceived(page);await page.screenshot({path:`output/line-send-guidance/guidance-${width}.png`,fullPage:true});
 });
 
+test('one shared refresh control keeps an unsent LINE code pending without sending or registering',async({page})=>{
+ const code=await prepare(page),refresh=page.getByRole('button',{name:'状態を更新',exact:true});
+ await expect(page.getByRole('button',{name:/状態を更新$/})).toHaveCount(1);await expect(refresh).toBeVisible();
+ const [response]=await Promise.all([page.waitForResponse(r=>r.request().method()==='GET'&&r.url().endsWith('/api/self/status')),refresh.click()]);
+ expect(response.ok()).toBe(true);await expect(refresh).toBeEnabled();
+ await expect(page.getByRole('button',{name:/状態を更新$/})).toHaveCount(1);
+ await expect(page.getByTestId('line-code')).toHaveText(code);await expect(open(page)).toBeVisible();
+ await expect(page.getByText('LINEから登録コードをまだ受け取っていません。',{exact:true})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'準備ができました',exact:true})).toHaveCount(0);
+ await notReceived(page);
+});
+
+test('the same single refresh reveals a signed LINE message without confirming or resending',async({page})=>{
+ const code=await prepare(page),refresh=page.getByRole('button',{name:'状態を更新',exact:true});
+ await expect(page.getByRole('button',{name:/状態を更新$/})).toHaveCount(1);await notReceived(page);
+ expect((await fixture(page,'line',{code,userId:'line-shared-refresh-fixture'})).ok()).toBe(true);expect(app.pushes).toHaveLength(1);
+ const [response]=await Promise.all([page.waitForResponse(r=>r.request().method()==='GET'&&r.url().endsWith('/api/self/status')),refresh.click()]);
+ expect(response.ok()).toBe(true);expect(await response.json()).toMatchObject({state:'line_pending',lineDetected:true,lineVerified:false});
+ await expect(page.getByLabel('確認番号',{exact:true})).toBeVisible();await expect(page.getByLabel('確認番号',{exact:true})).toHaveValue('');
+ await expect(open(page)).toHaveCount(0);await expect(page.getByRole('button',{name:/状態を更新$/})).toHaveCount(1);await expect(refresh).toBeVisible();
+ await expect(page.getByRole('heading',{name:'準備ができました',exact:true})).toHaveCount(0);
+ expect(await app.db.prepare('SELECT state,line_user_id,line_verified_at,terms_version FROM stores').first()).toEqual({state:'line_pending',line_user_id:null,line_verified_at:null,terms_version:null});
+ expect((await app.db.prepare('SELECT count(*) n FROM line_checks').first()).n).toBe(1);
+ expect(app.pushes).toHaveLength(1);expect(requests.filter(r=>r.method!=='GET'&&new URL(r.url).pathname.startsWith('/api/self/'))).toEqual([]);
+});
+
 test('opening LINE and returning without sending remains unreceived and performs no confirmation writes',async({page,context})=>{
  const code=await prepare(page);let opened=0;
  await context.route('https://line.me/R/oaMessage/**',async route=>{
@@ -61,7 +87,7 @@ test('opening LINE and returning without sending remains unreceived and performs
  await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));await read;
  await expect(page.getByText('LINEから登録コードをまだ受け取っていません。',{exact:true})).toBeVisible();
  await expect(page.getByText(sendHelp,{exact:true})).toBeVisible();await notReceived(page);
- await page.getByRole('button',{name:'LINEの検出状態を更新',exact:true}).click();await notReceived(page);
+ await page.getByRole('button',{name:'状態を更新',exact:true}).click();await notReceived(page);
  await expect(page.getByRole('heading',{name:'準備ができました',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'送信しました',exact:true})).toHaveCount(0);
 });
@@ -69,7 +95,7 @@ test('opening LINE and returning without sending remains unreceived and performs
 test('only a signed fixture code message delivers the one-button card and explicit original-browser next verifies',async({page})=>{
  const code=await prepare(page);await expect(page.getByText(sendHelp,{exact:true})).toBeVisible();await notReceived(page);
  expect((await fixture(page,'line',{code,userId:'line-send-guidance-fixture'})).ok()).toBe(true);expect(app.pushes).toHaveLength(1);
- await page.getByRole('button',{name:'LINEの検出状態を更新',exact:true}).click();
+ await page.getByRole('button',{name:'状態を更新',exact:true}).click();
  const message=app.pushes[0].messages[0],buttons=message.contents.footer.contents.filter(x=>x.type==='button');expect(buttons).toHaveLength(1);
  expect(buttons[0].action.type).toBe('uri');expect(buttons[0].action.label).toBe('確認して登録画面へ進む');
  const uri=new URL(buttons[0].action.uri),pin=new URLSearchParams(uri.hash.slice(1)).get('line-confirm');expect(pin).toMatch(/^\d{6}$/);

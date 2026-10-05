@@ -133,7 +133,7 @@ test('prefill never attaches a code to an unrecognised or redirected friend URL'
 test('returning to the same tab keeps a partially entered PIN and only reads status',async({page})=>{
   const code=await prepare(page);
   await fixture(page,'line',{code,userId:'line-prefill-fixture'});
-  await page.getByRole('button',{name:'LINEの検出状態を更新',exact:true}).click();
+  await page.getByRole('button',{name:'状態を更新',exact:true}).click();
   await page.getByRole('button',{name:'確認番号をLINEに送る',exact:true}).click();
   await expect(page.getByText('LINEに確認番号を送りました。届いている6桁を入力してください。',{exact:true})).toBeVisible();
   const input=page.getByLabel('確認番号',{exact:true});

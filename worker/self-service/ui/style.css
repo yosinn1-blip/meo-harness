@@ -309,6 +309,11 @@ footer {
 a {
   color: var(--blue);
 }
+.field-error {
+  color: var(--danger);
+  font-weight: 600;
+  margin: 8px 0 0;
+}
 #error {
   color: var(--danger);
   background: #fff0ef;

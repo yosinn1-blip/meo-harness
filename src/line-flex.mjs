@@ -96,6 +96,8 @@ export function buildReviewBubble({ replyId, review, bizName, rev = 1, editable 
             contents: [
               { type: 'text', text: '返信案', size: 'xs', color: '#aaaaaa' },
               { type: 'text', text: draftText, size: 'sm', wrap: true },
+              // 自己登録版: 期限と「押さなければ投稿されない」を本文に明示（2026-10-05 チラシ点検 F07）
+              ...(editable && hasReplyId ? [{ type: 'text', text: 'この返信案は7日で消えます。何も押さなければ投稿されません。', size: 'xs', color: '#888888', wrap: true }] : []),
             ],
           },
         ] : []),
