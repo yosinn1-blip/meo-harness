@@ -92,7 +92,7 @@ test('anonymous, same owner other session and another owner receive generic retu
   const context=await browser.newContext({ignoreHTTPSErrors:true});extraContexts.push(context);await configure(context);
   if(sub){const session=await createSession(app.ctx,sub);const pair=session.cookie.split(';')[0],i=pair.indexOf('=');await context.addCookies([{name:pair.slice(0,i),value:pair.slice(i+1),url:app.baseURL,secure:true,httpOnly:true,sameSite:'Lax'}]);}
   const other=await context.newPage();await other.goto(data.uri);await expect(other.getByRole('heading',{name:'登録を始めた画面へ戻ってください',exact:true})).toBeVisible();await emptyPin(other);await noStoredPin(other,data.pin);
-  await expect(other.getByText('元のタブでは、LINEのカードに書かれた6桁の確認番号を入力し、「確認する」を押してください。',{exact:true})).toBeVisible();
+  await expect(other.getByText('LINEのカードやメッセージに6桁の確認番号が書かれている場合は、元のタブでその番号を入力し、「確認する」を押してください。番号がない場合は、元のタブに表示される案内に沿って進めてください。',{exact:true})).toBeVisible();
   expect(await(await other.request.get(app.baseURL+'/api/self/line/return-status')).json()).toEqual({ok:true,state:'line_return_mismatch',csrf:null});
  }
  // Session fixtures are the only deliberate writes; return pages do not alter stores/challenges.
@@ -199,6 +199,29 @@ test('FAQ recovery steps lead to the buttons the one-button screen shows, in the
  await section.locator('summary').click();
  await expect(section.getByRole('button',{name:'確認番号をLINEに送る',exact:true})).toBeVisible();
  await expect(section.getByRole('button',{name:'確認番号をLINEに送る',exact:true})).toBeEnabled();
+});
+test('a number-only send lost before the server does not carry over to the card of a reissued registration code',async({page})=>{
+ await accepted(page);
+ await fixture(page,'advance',{ms:60001});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ await expect(page.getByRole('button',{name:'確認番号をLINEに送る',exact:true,includeHidden:true})).toBeEnabled();
+ await page.locator('summary',{hasText:'カードが届かない・期限が切れたとき'}).click();
+ await page.route('**/api/self/line/test',route=>route.abort('timedout'));
+ await page.getByRole('button',{name:'確認番号をLINEに送る',exact:true}).click();
+ await expect(page.getByRole('alert')).toHaveText('処理を完了できませんでした。状態を更新してやり直してください。');
+ const cardGuide='次に：LINEに届いたカードの「確認して登録画面へ進む」を押してください。押せないときは、カードに書かれた6桁を下に入力して「確認する」を押してください。';
+ await expect(page.getByText(cardGuide,{exact:true})).toBeVisible();expect(app.pushes).toHaveLength(1);await page.unrouteAll({behavior:'wait'});
+ // Start over with a new registration code; the server sends a fresh card automatically.
+ const retry=page.locator('details',{has:page.locator('summary',{hasText:'通知先のLINEを変更する・登録コードを送り直す'})});
+ await retry.locator('summary').click();const reissue=retry.getByRole('button',{name:'コードを再発行',exact:true});await expect(reissue).toBeEnabled();await reissue.click();
+ await expect(page.getByRole('link',{name:'LINEを開いてコードを送る',exact:true})).toBeVisible();
+ const code=await page.getByTestId('line-code').textContent();await fixture(page,'advance',{ms:60001});
+ await fixture(page,'line',{code,userId:'line-fixture'});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ await expect.poll(()=>app.pushes.length).toBe(2);const card=app.pushes[1].messages[0];expect(card.type).toBe('flex');
+ // The valid new card is not mistaken for the lost number-only send.
+ await expect(page.getByText(cardGuide,{exact:true})).toBeVisible();
+ await expect(page.getByText(unsureGuide,{exact:true})).toHaveCount(0);
+ await expect(page.getByText('LINEに番号だけのメッセージを送りました。',{exact:false})).toHaveCount(0);
+ await page.reload();await expect(page.getByText(cardGuide,{exact:true})).toBeVisible();await expect(page.getByText(unsureGuide,{exact:true})).toHaveCount(0);
 });
 test('one-button awaiting card names the one real card button',async({page})=>{
  await accepted(page);

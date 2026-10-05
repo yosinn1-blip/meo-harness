@@ -168,8 +168,10 @@ function startPinOnly(previousExpiresAt) {
   pinOnlyFrom = Number(previousExpiresAt) || 0;
   storePinOnly();
 }
-// A card send must not inherit an unresolved number-only attempt. A settled
-// marker stays: it only matches its own check, so a replaced check ignores it.
+// A card send or a new registration code must not inherit an unresolved
+// number-only attempt, or its valid card would be shown as that attempt's
+// result. A settled marker stays: it only matches its own check, so a replaced
+// check ignores it.
 function forgetPinOnlyAttempt() {
   if (pinOnlyFrom === null) return;
   pinOnlyFrom = null;
@@ -353,6 +355,9 @@ async function mutate(path, body = {}) {
   await refresh(true);
 }
 async function code() {
+  // A new registration starts a new check; an earlier lost number-only send
+  // must not be bound to the card that this registration sends.
+  forgetPinOnlyAttempt();
   const result = await api("line/code", {});
   lineCode = result.code;
   lineCodeExpiresAt = result.expiresAt;
@@ -564,7 +569,9 @@ async function render() {
     heading("登録を始めた画面へ戻ってください");
     text("このブラウザでは、登録を始めた本人の画面を確認できません。", "next-action");
     text("アプリ切替で、設定を始めたSafari・Chromeのタブへ戻ってください。別のタブやプライベートモードが開いた場合も、元のタブを選んでください。");
-    text("元のタブでは、LINEのカードに書かれた6桁の確認番号を入力し、「確認する」を押してください。", "small");
+    // This screen cannot tell the confirmation method (the response carries no
+    // registration details), and only some methods send a six-digit number.
+    text("LINEのカードやメッセージに6桁の確認番号が書かれている場合は、元のタブでその番号を入力し、「確認する」を押してください。番号がない場合は、元のタブに表示される案内に沿って進めてください。", "small");
     root.append(button("元の登録画面を再確認",()=>refresh(true),"secondary"));
     return;
   } else if (state.state === "anonymous") {

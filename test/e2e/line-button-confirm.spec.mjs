@@ -94,6 +94,12 @@ test('separate LINE session confirms; wrong return stays generic; original owner
  const before=await snapshot();await lp.getByRole('link',{name:'2 登録画面へ戻る',exact:true}).click();
  await expect(lp.getByRole('heading',{name:'登録を始めた画面へ戻ってください',exact:true})).toBeVisible();
  await lp.reload();await expect(lp.getByRole('heading',{name:'登録を始めた画面へ戻ってください',exact:true})).toBeVisible();
+ // Two-button cards carry no number: the wrong-browser guidance must not demand one.
+ const card=app.pushes[0].messages[0];expect(JSON.stringify(card)).not.toMatch(/\d{6}/);
+ await expect(lp.getByText('LINEのカードやメッセージに6桁の確認番号が書かれている場合は、元のタブでその番号を入力し、「確認する」を押してください。番号がない場合は、元のタブに表示される案内に沿って進めてください。',{exact:true})).toBeVisible();
+ await expect(lp.getByText('LINEのカードに書かれた6桁',{exact:false})).toHaveCount(0);
+ // The original tab offers the real next step and no number entry.
+ await expect(page.getByLabel('確認番号',{exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'通知先を確認して次へ',exact:true})).toBeVisible();
  expect(await snapshot()).toBe(before);expect(await line.cookies()).toHaveLength(0);
  await lp.screenshot({path:'output/self-service/button-wrong-return-375.png',fullPage:true});
  const uri=app.pushes[0].messages[0].contents.footer.contents[1].action.uri;
