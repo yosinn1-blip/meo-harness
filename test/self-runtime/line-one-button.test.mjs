@@ -63,6 +63,8 @@ test('manual link card contains one fixed-origin URI, fragment-only PIN metadata
  assert.equal(c.url.origin,'https://meo.test');assert.equal(c.url.pathname,'/start');assert.equal(c.url.search,'?openExternalBrowser=1');
  assert.deepEqual([...c.params.keys()],['line-confirm','store','expires']);assert.equal(c.storeId,(await f.store()).id);assert.equal(c.expiresAt,result.expiresAt);assert.equal(c.expiresAt,f.ctx.now()+300000);
  const body=c.message.contents.body.contents.map(x=>x.text).join('\n');assert(body.includes('5分'));assert(body.includes('本人'));assert(body.includes('転送'));assert(body.includes(c.pin));assert(body.includes('長'.repeat(300)));assert(!body.includes('長'.repeat(301)));
+ // The body says where the button leads before the warning; the button stays the only action.
+ assert(body.includes('通知先を確認して次へ'));assert(!body.includes('リンクの転送は禁止'));assert.equal(c.message.contents.footer.contents.filter(x=>x.action).length,1);
  assert(!JSON.stringify(c.message).includes('postback'));const check=await f.db.prepare('SELECT * FROM line_checks').first();assert.notEqual(check.pin_hash,c.pin);assert.equal(check.attempts,0);
  assert.equal((await f.db.prepare('SELECT count(*) n FROM line_button_checks').first()).n,0);const status=await f.status();assert.equal(status.pinAvailable,true);assert.equal(status.method,'pin');assert.equal(status.expiresAt,c.expiresAt);
  assert.equal((await f.store()).state,'line_pending');assert.equal((await f.store()).termsVersion,null);

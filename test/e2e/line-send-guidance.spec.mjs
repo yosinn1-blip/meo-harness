@@ -4,6 +4,7 @@ import {startTestApp} from '../support/self-browser.mjs';
 const openName='LINEを開いてコードを送る';
 const sendHelp='LINEが開いたら、入力欄の右側にある送信ボタン（矢印）を1回押してください。開いただけでは登録されません。';
 const waitingHelp='送信後はLINEのトークで確認カードが届くまで待ち、「確認して登録画面へ進む」を押してください。';
+const friendHelp='初回は、まず友だち追加の画面が出ます。追加したら、この画面に戻って同じボタンをもう一度押してください。';
 let app,unexpected,requests;
 test.beforeEach(async({context})=>{
  app=await startTestApp();unexpected=[];requests=[];
@@ -44,6 +45,10 @@ for(const width of [320,375,1280])test(`human send instruction is prominent besi
  await expect(open(page)).toBeVisible();await expect(page.getByText(waitingHelp,{exact:true})).toBeVisible();
  const presentation=await instruction.evaluate(e=>({weight:Number(getComputedStyle(e).fontWeight),border:Number.parseFloat(getComputedStyle(e).borderLeftWidth),before:!!(e.compareDocumentPosition(document.querySelector('a[href*="oaMessage/"]'))&Node.DOCUMENT_POSITION_FOLLOWING)}));
  expect(presentation.weight).toBeGreaterThanOrEqual(600);expect(presentation.border).toBeGreaterThanOrEqual(3);expect(presentation.before).toBe(true);
+ const friend=page.getByText(friendHelp,{exact:true});await expect(friend).toBeVisible();await expect(friend).toHaveClass('next-action');
+ expect(await friend.evaluate((e,text)=>!!(e.compareDocumentPosition([...document.querySelectorAll('p')].find(p=>p.textContent===text))&Node.DOCUMENT_POSITION_FOLLOWING),sendHelp)).toBe(true);
+ await expect(page.getByText('アプリ切替',{exact:false})).toHaveCount(0);
+ await expect(page.getByRole('heading',{name:'まず、LINEでコードを送る',exact:true})).toBeVisible();
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
  const url=new URL(await open(page).getAttribute('href'));expect(url.origin).toBe('https://line.me');expect(url.pathname).toBe('/R/oaMessage/%40fixture/');expect(decodeURIComponent(url.search.slice(1))).toBe(code);
  await notReceived(page);await page.screenshot({path:`output/line-send-guidance/guidance-${width}.png`,fullPage:true});
@@ -57,6 +62,8 @@ test('one shared refresh control keeps an unsent LINE code pending without sendi
  await expect(page.getByRole('button',{name:/状態を更新$/})).toHaveCount(1);
  await expect(page.getByTestId('line-code')).toHaveText(code);await expect(open(page)).toBeVisible();
  await expect(page.getByText('LINEから登録コードをまだ受け取っていません。',{exact:true})).toBeVisible();
+ // The not-received line sits with the refresh hint, directly above the one refresh control.
+ expect(await page.getByText('LINEから登録コードをまだ受け取っていません。',{exact:true}).evaluate(e=>[e.nextElementSibling?.textContent,e.nextElementSibling?.nextElementSibling?.textContent])).toEqual(['通常は自動で検出します。画面が変わらないときだけ、状態を更新してください。','状態を更新']);
  await expect(page.getByRole('heading',{name:'準備ができました',exact:true})).toHaveCount(0);
  await notReceived(page);
 });

@@ -98,6 +98,25 @@ for (const [state, width] of [["line_verified", 320], ["ready", 375]]) {
     const error = page.getByText(consentMessage, { exact: true });
     await expect(checkbox).not.toBeChecked();
     await expect(error).toBeHidden();
+    await expect(page.getByText("最初は5件", { exact: false })).toHaveCount(0);
+    for (const point of [
+      "無料です。同意なしに有料になることはありません。",
+      "ここで利用を開始しても、まだ何も公開されません。Googleに公開されるのは、LINEで「送信」を押した返信だけです。",
+      "アカウント画面からいつでも停止・切断できます。公開済みの返信は残ります。",
+      "AIの文章は間違えることがあります。送る前に読んでください。",
+    ]) await expect(page.getByText(point, { exact: true })).toBeVisible();
+    expect((await page.locator(".terms-check").boundingBox()).height).toBeGreaterThanOrEqual(48);
+    // A long limit label must not split the count ("3" / "件") onto two lines.
+    // Count text lines (the flex item itself stretches to the row height).
+    for (const lines of await page.locator(".capacity strong").evaluateAll((els) => els.map((e) => {
+      const range = document.createRange();
+      range.selectNodeContents(e);
+      return new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size;
+    })))
+      expect(lines).toBe(1);
+    const box = await checkbox.boundingBox();
+    expect(Math.round(box.width)).toBe(24);
+    expect(Math.round(box.height)).toBe(24);
     requests = [];
     await start.click();
     await expect(error).toBeVisible();

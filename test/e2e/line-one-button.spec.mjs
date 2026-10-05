@@ -92,6 +92,7 @@ test('anonymous, same owner other session and another owner receive generic retu
   const context=await browser.newContext({ignoreHTTPSErrors:true});extraContexts.push(context);await configure(context);
   if(sub){const session=await createSession(app.ctx,sub);const pair=session.cookie.split(';')[0],i=pair.indexOf('=');await context.addCookies([{name:pair.slice(0,i),value:pair.slice(i+1),url:app.baseURL,secure:true,httpOnly:true,sameSite:'Lax'}]);}
   const other=await context.newPage();await other.goto(data.uri);await expect(other.getByRole('heading',{name:'登録を始めた画面へ戻ってください',exact:true})).toBeVisible();await emptyPin(other);await noStoredPin(other,data.pin);
+  await expect(other.getByText('元のタブでは、LINEのカードに書かれた6桁の確認番号を入力し、「確認する」を押してください。',{exact:true})).toBeVisible();
   expect(await(await other.request.get(app.baseURL+'/api/self/line/return-status')).json()).toEqual({ok:true,state:'line_return_mismatch',csrf:null});
  }
  // Session fixtures are the only deliberate writes; return pages do not alter stores/challenges.
@@ -157,4 +158,35 @@ test('local expiry discards RAM and DOM proof even when every return-status requ
  const data=await accepted(page);await page.clock.install({time:new Date(app.ctx.now())});await page.goto(data.uri);await expect(page.getByLabel('確認番号',{exact:true})).toHaveValue(data.pin);
  await page.route('**/api/self/line/return-status',async route=>{const r=route.request();requests.push({method:r.method(),url:r.url(),body:r.postData()});await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({ok:false,code:'REGISTRATION_CLOSED'})});});
  await page.clock.fastForward(300001);await emptyPin(page);await noStoredPin(page,data.pin);expect(confirmPosts()).toHaveLength(0);expect(app.pushes).toHaveLength(1);
+});
+test('original tab without the card link guides to the card, keeps PIN entry and resends the same card type',async({page})=>{
+ const data=await accepted(page);
+ await expect(page.getByText('次に：LINEに届いたカードの「確認して登録画面へ進む」を押してください。押せないときは、カードに書かれた6桁を下に入力して「確認する」を押してください。',{exact:true})).toBeVisible();
+ await expect(page.getByText('LINEに確認番号を送りました。届いている6桁を入力してください。',{exact:true})).toHaveCount(0);
+ await expect(page.getByText('アプリ切替',{exact:false})).toHaveCount(0);
+ const pinOnly=page.getByRole('button',{name:'確認番号をLINEに送る',exact:true,includeHidden:true});await expect(pinOnly).toHaveCount(1);await expect(pinOnly).toBeHidden();
+ await expect(page.getByRole('button',{name:'ボタン確認へ切り替えて送る',exact:true,includeHidden:true})).toHaveCount(0);
+ await expect(page.getByLabel('確認番号',{exact:true})).toBeVisible();await screens(page,'onecard-detected');
+ await expect(page.getByRole('button',{name:'確認カードをもう一度送る',exact:true,includeHidden:true})).toBeDisabled();
+ await fixture(page,'advance',{ms:60001});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ // Wait for the refreshed render (minute lock released) before opening the recovery section.
+ await expect(page.getByRole('button',{name:'確認カードをもう一度送る',exact:true,includeHidden:true})).toBeEnabled();
+ await page.locator('summary',{hasText:'カードが届かない・期限が切れたとき'}).click();
+ const [r]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/api/self/line/button'),page.getByRole('button',{name:'確認カードをもう一度送る',exact:true}).click()]);expect(r.ok()).toBe(true);
+ expect(app.pushes).toHaveLength(2);expect(app.pushes[1].messages[0].contents.footer.contents.filter(c=>c.type==='button')[0].action.label).toBe('確認して登録画面へ進む');
+ await page.goto(data.uri);await emptyPin(page);
+ await fixture(page,'advance',{ms:300001});await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ await expect(page.getByText('確認カードの期限が切れたか、番号の照合回数の上限に達しました。次に：「確認カードをもう一度送る」を押してください。',{exact:true})).toBeVisible();
+ const resend=page.getByRole('button',{name:'確認カードをもう一度送る',exact:true});await expect(resend).toBeVisible();await expect(resend).toBeEnabled();
+ expect(await resend.evaluate(b=>b.closest('details')===null&&!b.classList.contains('secondary'))).toBe(true);
+ await screens(page,'onecard-expired');expect(app.pushes).toHaveLength(2);
+});
+test('one-button awaiting card names the one real card button',async({page})=>{
+ await accepted(page);
+ // Lose the delivery record inside the 20s automatic window: status reports the automatic card as awaiting.
+ await app.db.prepare('DELETE FROM line_check_deliveries').run();
+ await page.getByRole('button',{name:'状態を更新',exact:true}).click();
+ await expect(page.getByText('確認カードの送信状況を確認しています。',{exact:false})).toBeVisible();
+ await expect(page.getByText('確認カードの送信状況を確認しています。届いたカードの「確認して登録画面へ進む」を押してください。自動では再送しません。',{exact:true})).toBeVisible();
+ await expect(page.getByText('1 このLINEで確認',{exact:false})).toHaveCount(0);
 });

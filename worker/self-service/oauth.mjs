@@ -41,7 +41,7 @@ export async function verifyGoogleIdToken(
     throw new SelfError("GOOGLE_IDENTITY_INVALID", 401);
   }
 }
-export async function startGoogle(ctx, request, { intent, challenge }) {
+export async function startGoogle(ctx, request, { intent, challenge, switchAccount }) {
   ensure(["connect", "login", "reconnect"].includes(intent), "INVALID_INTENT");
   const c = readSelfConfig(ctx.env);
   ensure(c.configured, "REGISTRATION_CLOSED", 503);
@@ -116,8 +116,16 @@ export async function startGoogle(ctx, request, { intent, challenge }) {
     nonce,
     code_challenge: cc,
     code_challenge_method: "S256",
+    // The account chooser is shown only when the user asked to start over with
+    // another Google account. Reconnect must keep the same account; login stays silent.
     ...(intent !== "login"
-      ? { access_type: "offline", prompt: "consent" }
+      ? {
+          access_type: "offline",
+          prompt:
+            intent === "connect" && switchAccount === true
+              ? "select_account consent"
+              : "consent",
+        }
       : {}),
   }).toString();
   return { authorizationUrl: url.toString() };
