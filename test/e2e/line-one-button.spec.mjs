@@ -145,6 +145,8 @@ test('a forged six-digit link never verifies until explicit POST and still fails
  const data=await accepted(page),wrong=data.pin==='000000'?'000001':'000000';await page.goto(changed(data.uri,p=>p.set('line-confirm',wrong)));
  await expect(page.getByLabel('確認番号',{exact:true})).toHaveValue(wrong);expect(confirmPosts()).toHaveLength(0);
  const [r]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/api/self/line/verify'),page.getByRole('button',{name:nextName,exact:true}).click()]);expect(r.ok()).toBe(false);expect((await r.json()).code).toBe('PIN_INVALID');
+ // A stale card (e.g. after a number-only resend in another tab) must point to the latest LINE message.
+ await expect(page.getByRole('alert')).toContainText('いちばん新しく届いたカードか番号を使ってください');
  expect((await app.db.prepare('SELECT state,terms_version FROM stores').first())).toEqual({state:'line_pending',terms_version:null});expect((await app.db.prepare('SELECT attempts FROM line_checks').first()).attempts).toBe(1);expect(app.pushes).toHaveLength(1);
 });
 
