@@ -68,7 +68,8 @@ export async function startTestApp() {
   const unexpected = [],
     writes = [],
     pushes = [],
-    feedback = [];
+    feedback = [],
+    loadings = [];
   const settings = {
     locations: 1,
     googleFailure: false,
@@ -149,6 +150,10 @@ export async function startTestApp() {
       if (u.pathname.endsWith("/reply")) {
         feedback.push(JSON.parse(init.body));
         return Response.json({});
+      }
+      if (u.pathname === "/v2/bot/chat/loading/start") {
+        loadings.push(JSON.parse(init.body));
+        return new Response(null, { status: 202 });
       }
       if (u.pathname.endsWith("/quota"))
         return Response.json({ type: "limited", value: settings.quota });
@@ -342,6 +347,7 @@ export async function startTestApp() {
     writes,
     pushes,
     feedback,
+    loadings,
     db,
     ctx,
     async stop() {

@@ -436,7 +436,18 @@ async function processLineEvents(events, env) {
       }
       if (env.SELF_DB && event.type === 'message' && /^MEOS-/.test(event.message?.text?.trim().toUpperCase() ?? '')) {
         const {consumeLineCode}=await import('./self-service/line-link.mjs');
-        await consumeLineCode({...createSelfContext(env),lineCheckSignal},event,{deferCheck:task=>lineChecks.push(task)});continue;
+        const selfCtx={...createSelfContext(env),lineCheckSignal};
+        try {
+          await consumeLineCode(selfCtx,event,{deferCheck:task=>lineChecks.push(task)});
+        } catch (err) {
+          if (err?.code !== 'LINE_CODE_INVALID') throw err;
+          console.error('[line-message] error:', err.message);
+          try {
+            const {sendSelfCodeNotice}=await import('./self-service/feedback.mjs');
+            await sendSelfCodeNotice(selfCtx,event);
+          } catch {} // Never replace an unavailable reply with a paid push.
+        }
+        continue;
       }
       // Text sent after 「書き直す」 becomes the new draft; other chat falls through.
       if (env.SELF_DB && event.type === 'message' && event.message?.type === 'text') {
