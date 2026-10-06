@@ -124,7 +124,7 @@ for(const failure of ['429','timeout','accepted-save-failure'])test(':15 LINE '+
  }});
  const store=await seedStore(ctx);await seedGoogleCredential(ctx);await seedAbandoned(ctx);
  await seedReply(ctx,store,'new');await seedReply(ctx,store,'unknown','post_unknown');
- const meter=meterD1(db,()=>failure==='accepted-save-failure'&&pushes>0&&savedFailures++===0);ctx.db=meter.db;
+ const meter=meterD1(db,sqls=>failure==='accepted-save-failure'&&pushes>0&&sqls.some(q=>q.includes("state='accepted'"))&&savedFailures++===0);ctx.db=meter.db;
  await runSelfScheduled(ctx);bounded(t,meter.stats);
  assert.equal(pushes,1);assert.equal(gets,0,'the notify slot does not reconcile');
  const notification=await db.prepare('SELECT state,lease_id,attempt_no,next_attempt_at FROM notification_jobs').first();

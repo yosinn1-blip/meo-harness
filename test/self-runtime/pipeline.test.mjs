@@ -7,6 +7,7 @@ import {
   seedStore,
 } from "../support/self-runtime.mjs";
 import { seedGoogleCredential } from "../support/self-google.mjs";
+import { meterD1 } from "../support/d1-meter.mjs";
 import { createSelfContext } from "../../worker/self-service/config.mjs";
 import {
   pollSelfStore,
@@ -252,21 +253,51 @@ test("LINE accepted then notification DB update fails: retry sends no second pus
   await processSelfJobs(ctx);
   const db = ctx.db;
   let failed = false;
-  ctx.db = {
-    prepare: db.prepare.bind(db),
-    batch(statements) {
-      if (calls.push.length && !failed) {
-        failed = true;
-        throw new Error("fixture DB failure");
-      }
-      return db.batch(statements);
-    },
-  };
+  // The reservation commit (with the acceptance time) is saved; only the
+  // notification row's own update fails.
+  ctx.db = meterD1(db, (sqls) => {
+    if (failed || !calls.push.length || !sqls.some((q) => q.includes("state='accepted'")))
+      return false;
+    return (failed = true);
+  }).db;
   await assert.rejects(() => sendSelfDigest(ctx, store.id));
   const failedAt = ctx.now();
   ctx.now = () => failedAt + 30 * 60000;
   await sendSelfDigest(ctx, store.id);
   assert.equal(calls.push.length, 1);
+  assert.equal(
+    (await db.prepare("SELECT state FROM notification_jobs").first()).state,
+    "accepted",
+  );
+  assert.equal(
+    (
+      await db
+        .prepare("SELECT used FROM usage_budgets WHERE kind='push'")
+        .first()
+    ).used,
+    1,
+  );
+});
+test("LINE accepted then the reservation commit fails: the retry reuses the same retry key", async (t) => {
+  const { ctx, store, calls } = await setup(t);
+  await pollSelfStore(ctx, store.id);
+  await processSelfJobs(ctx);
+  const db = ctx.db;
+  let failed = false;
+  ctx.db = meterD1(db, (sqls) => {
+    if (failed || !calls.push.length || !sqls.some((q) => q.includes("UPDATE usage_reservations")))
+      return false;
+    return (failed = true);
+  }).db;
+  await assert.rejects(() => sendSelfDigest(ctx, store.id));
+  assert.equal(failed, true);
+  const failedAt = ctx.now();
+  ctx.now = () => failedAt + 30 * 60000;
+  await sendSelfDigest(ctx, store.id);
+  // LINE answers a repeated retry key of an accepted push with 409 and does
+  // not deliver it again.
+  assert.equal(calls.push.length, 2);
+  assert.equal(calls.push[0].key, calls.push[1].key);
   assert.equal(
     (await db.prepare("SELECT state FROM notification_jobs").first()).state,
     "accepted",

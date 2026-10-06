@@ -16,6 +16,9 @@ export const LIMITS = Object.freeze({
   // 4h for a batch of five while more reviews are still being drafted.
   notifyMinAgeMs: 3600000,
   notifyBatchWaitMs: 14400000,
+  // The review text is kept for 7 days from the fetch (purgeExpired); a draft
+  // whose review is older can no longer be delivered.
+  reviewKeepMs: 7 * 86400000,
   processingConcurrency: 2,
   testCooldownMs: 60000,
   testsPerDay: 3,

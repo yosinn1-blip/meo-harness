@@ -72,7 +72,7 @@ test('a digest sent at JST 23:55 whose row save failed is closed next morning wi
  const w=await world(t,{n:1,T0:night,lineStatus:()=>{armed=true;return 200;}});const [a]=w.stores;
  await seedDraft(w.ctx,a,'r1',night-2*H);
  // LINE accepts and the push reservation commits; then the acceptance batch fails.
- const meter=meterD1(w.db,()=>{if(!armed)return false;armed=false;return true;});
+ const meter=meterD1(w.db,sqls=>{if(!armed||!sqls.some(q=>q.includes("state='accepted'")))return false;armed=false;return true;});
  await assert.rejects(sendSelfDigest({...w.ctx,db:meter.db},a.id),/fixture storage unavailable/);
  assert.equal(w.log.pushes.length,1);
  const left=await w.db.prepare('SELECT state,last_attempt_at,lease_until FROM notification_jobs').first();
@@ -86,4 +86,27 @@ test('a digest sent at JST 23:55 whose row save failed is closed next morning wi
  assert.deepEqual([closed.state,closed.last_attempt_at],['accepted',night],'the local recovery keeps the time of the real send');
  assert.deepEqual(w.log.pushes.map(p=>jstDay(p.at)),['2026-10-05','2026-10-06'],'the next JST day still gets its LINE');
  assert.equal(w.log.line-w.log.quotaGets*2,2,'the local recovery itself calls no LINE API');
+});
+
+test('a late cron that sends at JST 23:59:59 and is accepted at 00:00:01 holds the acceptance day even if the row save fails',async t=>{
+ const sendAt=Date.parse('2026-10-05T14:59:59Z'); // JST 10-05 23:59:59
+ const acceptedAt=sendAt+2000;                     // JST 10-06 00:00:01
+ let armed=false;
+ const w=await world(t,{n:1,T0:sendAt,lineStatus:now=>{if(now===sendAt){w.clock.now=acceptedAt;armed=true;}return 200;}});const [a]=w.stores;
+ await seedDraft(w.ctx,a,'r1',sendAt-2*H);
+ const meter=meterD1(w.db,sqls=>{if(!armed||!sqls.some(q=>q.includes("state='accepted'")))return false;armed=false;return true;});
+ await assert.rejects(sendSelfDigest({...w.ctx,db:meter.db},a.id),/fixture storage unavailable/);
+ assert.equal(w.log.pushes.length,1);
+ assert.equal((await w.db.prepare("SELECT state FROM usage_reservations WHERE kind='push'").first()).state,'committed');
+ const left=await w.db.prepare('SELECT state,last_attempt_at FROM notification_jobs').first();
+ assert.deepEqual([left.state,left.last_attempt_at],['pending',acceptedAt],'the acceptance time is saved with the reservation commit');
+ const day2=Date.parse('2026-10-06T00:00:00Z'); // JST 10-06 09:00
+ await seedDraft(w.ctx,a,'r2',day2-2*H);
+ w.clock.now=day2;
+ await w.runUntil(Date.parse('2026-10-06T14:55:00Z')); // JST 23:55
+ const closed=await w.db.prepare("SELECT state,last_attempt_at FROM notification_jobs WHERE day_key='2026-10-05'").first();
+ assert.deepEqual([closed.state,closed.last_attempt_at],['accepted',acceptedAt],'the local recovery keeps the acceptance time');
+ assert.equal(w.log.pushes.length,1,'no second LINE accepted on JST 10-06: '+JSON.stringify(w.log.pushes.map(p=>iso(p.at))));
+ await w.slot(Date.parse('2026-10-07T00:15:00Z')); // JST 10-07 09:15
+ assert.deepEqual(w.log.pushes.map(p=>jstDay(p.at)),['2026-10-06','2026-10-07']);
 });

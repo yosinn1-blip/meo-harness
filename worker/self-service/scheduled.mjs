@@ -80,7 +80,8 @@ async function runDraft(ctx) {
 // retry waits from its due time, a new digest from max(oldest draft + the
 // minimum age, JST 09:00 today). A retry is re-due after every attempt, so a
 // store whose LINE keeps failing can never keep a waiting new digest out (a
-// tie goes to the retry). Stores with nothing to deliver, or whose JST day is
+// tie goes to the retry). Stores with nothing to deliver (a draft whose review
+// text is past its 7-day keep cannot be delivered), or whose JST day is
 // already used, are never picked.
 export async function pickNotifyStore(ctx) {
   const now = ctx.now();
@@ -89,6 +90,7 @@ export async function pickNotifyStore(ctx) {
     .prepare(
       `WITH d AS (SELECT r.store_id,count(*) c,MIN(j.created_at) oldest FROM replies r JOIN review_jobs j ON j.id=r.job_id JOIN stores s ON s.id=r.store_id
  WHERE r.state='pending' AND j.stage='draft_ready' AND r.generation=s.generation AND r.expires_at>?1
+ AND j.created_at>?8 AND j.payload_ciphertext IS NOT NULL AND r.draft_ciphertext IS NOT NULL
  AND NOT EXISTS (SELECT 1 FROM notification_items i WHERE i.reply_id=r.id) GROUP BY r.store_id),
 u AS (SELECT j.store_id,count(*) c FROM review_jobs j JOIN stores s ON s.id=j.store_id
  WHERE j.stage IN ('fetched','drafting') AND j.generation=s.generation AND j.next_attempt_at<=?1 AND j.payload_ciphertext IS NOT NULL GROUP BY j.store_id),
@@ -109,6 +111,7 @@ ORDER BY COALESCE(t.due,MAX(d.oldest+?6,?7)),(t.store_id IS NULL),COALESCE(t.due
       jstDayStart(now),
       LIMITS.notifyMinAgeMs,
       jstDayStart(now) + 9 * 3600000,
+      now - LIMITS.reviewKeepMs,
     )
     .first();
 }

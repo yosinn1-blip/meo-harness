@@ -69,17 +69,19 @@ export async function reserveUsageBatch(
     throw e;
   }
 }
-export async function settleUsage(ctx, id, outcome) {
+function settleStatement(ctx, id, outcome) {
   ensure(
     ["committed", "released", "uncertain"].includes(outcome),
     "INVALID_RESERVATION",
   );
-  await ctx.db
+  return ctx.db
     .prepare(
       "UPDATE usage_reservations SET state=? WHERE id IN (?,?) AND state<>'released' AND (state<>'committed' OR ?='released' AND kind='active')",
     )
-    .bind(outcome, id, id + ":provider", outcome)
-    .run();
+    .bind(outcome, id, id + ":provider", outcome);
+}
+export async function settleUsage(ctx, id, outcome) {
+  await settleStatement(ctx, id, outcome).run();
 }
 export function remainingPushBudget({
   localRemaining,
@@ -183,7 +185,12 @@ export async function reservePush(ctx, { id, storeId }) {
     { before, after: [ctx.db.prepare("DELETE FROM mutation_guards")] },
   );
 }
-export async function sendReservedPush(ctx, { id, to, messages, retryKey }) {
+// onAccepted(acceptedAt) may return statements that must be saved in the same
+// transaction as the reservation commit (e.g. the caller's acceptance time).
+export async function sendReservedPush(
+  ctx,
+  { id, to, messages, retryKey, onAccepted },
+) {
   const reservation = await ctx.db
     .prepare("SELECT state FROM usage_reservations WHERE id=?")
     .bind(id)
@@ -216,7 +223,11 @@ export async function sendReservedPush(ctx, { id, to, messages, retryKey }) {
     (response.status === 409 &&
       response.headers.get("x-line-accepted-request-id"))
   ) {
-    await settleUsage(ctx, id, "committed");
+    const acceptedAt = ctx.now();
+    const extra = onAccepted?.(acceptedAt) ?? [];
+    if (extra.length)
+      await ctx.db.batch([settleStatement(ctx, id, "committed"), ...extra]);
+    else await settleUsage(ctx, id, "committed");
     return {
       accepted: true,
       requestId:

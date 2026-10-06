@@ -9,7 +9,7 @@ import {claimLocation,getStore} from '../../worker/self-service/store-repository
 import {runSelfScheduled} from '../../worker/self-service/scheduled.mjs';
 import {seal,sha256,tokenKey} from '../../worker/self-service/crypto.mjs';
 
-export const H=3600000,M=60000,SLOT=5*M;
+export const H=3600000,M=60000,SLOT=5*M,D=24*H;
 export const jstHour=t=>new Date(t+9*H).getUTCHours();
 export const jstDay=t=>new Date(t+9*H).toISOString().slice(0,10);
 export const iso=t=>new Date(t).toISOString();

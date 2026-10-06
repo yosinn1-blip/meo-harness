@@ -1,5 +1,5 @@
 import { readSelfConfig } from "./config.mjs";
-import { dateKeys, jstDayStart, jstHour } from "./contracts.mjs";
+import { LIMITS, dateKeys, jstDayStart, jstHour } from "./contracts.mjs";
 import { getStore } from "./store-repository.mjs";
 import { storeGuard } from "./lifecycle.mjs";
 import { seal, unseal, tokenKey } from "./crypto.mjs";
@@ -9,8 +9,11 @@ import { ensure } from "./errors.mjs";
 // A store's JST day is used by any digest keyed to it, or by any digest that
 // was attempted or accepted on it. last_attempt_at (0006) is the time this
 // code last called LINE's push for the digest: written just before the push
-// and again on acceptance, never by a claim that did not call LINE (quota hold,
-// inactive store, or the local close of an already committed reservation).
+// and, on acceptance, set to the acceptance time in the same transaction as
+// the push reservation commit (so a late run accepted after JST midnight holds
+// the new day even if the row's own save then fails). A claim that does not
+// call LINE (quota hold, inactive store, or the local close of an already
+// committed reservation) never writes it.
 // next_attempt_at is only the retry due time and lease_until only the lease.
 // Rows written before 0006 have no last_attempt_at, so their retry or
 // acceptance time is unknown: such a row with a first attempt in the last
@@ -44,9 +47,9 @@ export async function sendSelfDigest(ctx, storeId) {
       return;
     const rows = await ctx.db
       .prepare(
-        "SELECT r.*,j.payload_ciphertext,j.created_at AS job_created_at FROM replies r JOIN review_jobs j ON j.id=r.job_id WHERE r.store_id=? AND r.generation=? AND r.state='pending' AND j.stage='draft_ready' AND r.expires_at>? AND r.id NOT IN (SELECT reply_id FROM notification_items) ORDER BY j.created_at,r.id LIMIT 5",
+        "SELECT r.*,j.payload_ciphertext,j.created_at AS job_created_at FROM replies r JOIN review_jobs j ON j.id=r.job_id WHERE r.store_id=? AND r.generation=? AND r.state='pending' AND j.stage='draft_ready' AND r.expires_at>? AND j.created_at>? AND j.payload_ciphertext IS NOT NULL AND r.draft_ciphertext IS NOT NULL AND r.id NOT IN (SELECT reply_id FROM notification_items) ORDER BY j.created_at,r.id LIMIT 5",
       )
-      .bind(storeId, store.generation, ctx.now())
+      .bind(storeId, store.generation, ctx.now(), ctx.now() - LIMITS.reviewKeepMs)
       .all();
     if (!rows.results.length) return;
     const reviews = [];
@@ -193,20 +196,19 @@ export async function sendSelfDigest(ctx, storeId) {
       id: reservationId,
       ...payload,
       retryKey: notification.retry_key,
+      onAccepted: (acceptedAt) => [
+        ctx.db
+          .prepare("UPDATE notification_jobs SET last_attempt_at=? WHERE id=?")
+          .bind(acceptedAt, notification.id),
+      ],
     });
     await ctx.db.batch([
       ctx.db
         .prepare(
-          // last_attempt_at := acceptance time, only when LINE was called.
-          "UPDATE notification_jobs SET state='accepted',accepted_request_id=?,last_attempt_at=CASE WHEN ? THEN ? ELSE last_attempt_at END,lease_id=NULL,lease_until=NULL WHERE id=? AND lease_id=?",
+          // last_attempt_at was saved with the reservation commit.
+          "UPDATE notification_jobs SET state='accepted',accepted_request_id=?,lease_id=NULL,lease_until=NULL WHERE id=? AND lease_id=?",
         )
-        .bind(
-          result.requestId ?? null,
-          callsLine && !result.local ? 1 : 0,
-          ctx.now(),
-          notification.id,
-          lease,
-        ),
+        .bind(result.requestId ?? null, notification.id, lease),
       ctx.db
         .prepare(
           "UPDATE review_jobs SET stage='notified',updated_at=? WHERE id IN (SELECT r.job_id FROM replies r JOIN notification_items n ON n.reply_id=r.id WHERE n.notification_id=?) AND stage='draft_ready'",

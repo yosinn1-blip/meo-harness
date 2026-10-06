@@ -46,7 +46,7 @@ Nodeテスト、実D1エンジンの隔離テスト、Chrome for Testingの専�
 ## 2. 外部設定は対象を示して別途承認する
 
 - Google: GBP API利用承認とは別に、OAuthアプリの表示名・検証済みドメイン・プライバシーURL・公開状態を確認。通常ログインは`openid`のみ、GBP接続は`openid`と`https://www.googleapis.com/auth/business.manage`。redirectは対象Workerと同じオリジンの`/api/self/google/callback`。
-- Cloudflare: 対象アカウントとWorkerを確認してからD1を作成し、`migrations/0001_self_service.sql`を適用。`SELF_DB`にbinding。実Secretsと`.dev.vars`をビルド/テストへ流さない。
+- Cloudflare: 対象アカウントとWorkerを確認してからD1を作成し、`migrations/0001_self_service.sql`を適用。既存D1へは足りないmigrationだけを適用する（2026-10-06の5分ごと処理は `0006_notification_last_attempt.sql` が先に必要。`npm run deploy` の predeploy が列の有無を読み取りで確かめ、無ければ止まる）。`SELF_DB`にbinding。実Secretsと`.dev.vars`をビルド/テストへ流さない。
 - 鍵: `SELF_TOKEN_KEY_V1`と`SELF_RATE_KEY`をSecret管理で生成・追加する。暗号鍵を勝手に回転/消去しない。復元時には同じ版の鍵を必要とする。
 - 既存店: KV店舗一覧のGBP locationをD1の`location_claims`に先に予約し、重複・件数を確認。既存経路の新規作成にも同じ予約が適用される。既存稼働店を自己登録へ自動移行しない。
   - 既存店のGBP店舗選択を変更する場合は、新しいlocationの予約を追加してからKVを保存する。旧locationの予約は自動解放しない。KV保存失敗・並行変更・処理中の旧口コミを考慮し、誤って自己登録側へ引き渡さないため。旧形式の予約も引き続き認識する。
