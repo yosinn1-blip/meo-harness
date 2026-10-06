@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {H,M,jstDay,iso,world,seedDraft} from '../support/schedule-world.mjs';
+import {H,M,SLOT,jstDay,jstHour,iso,world,seedDraft} from '../support/schedule-world.mjs';
+import {runSelfScheduled} from '../../worker/self-service/scheduled.mjs';
 import {meterD1} from '../support/d1-meter.mjs';
 import {withD1,applySchema} from '../support/self-runtime.mjs';
 import {sendSelfDigest} from '../../worker/self-service/notifications.mjs';
@@ -66,8 +67,8 @@ test('stores whose LINE push keeps timing out do not starve a healthy store',asy
  assert.equal(held,5,'the timing-out digests keep their reservation and retry key');
 });
 
-test('a digest sent at JST 23:55 whose row save failed is closed next morning without using that day',async t=>{
- const night=Date.parse('2026-10-05T14:55:00Z'); // JST 10-05 23:55
+test('a digest sent at JST 20:55, the last notify slot before 21:00, whose row save failed is closed next morning without using that day',async t=>{
+ const night=Date.parse('2026-10-05T11:55:00Z'); // JST 10-05 20:55
  let armed=false;
  const w=await world(t,{n:1,T0:night,lineStatus:()=>{armed=true;return 200;}});const [a]=w.stores;
  await seedDraft(w.ctx,a,'r1',night-2*H);
@@ -88,9 +89,10 @@ test('a digest sent at JST 23:55 whose row save failed is closed next morning wi
  assert.equal(w.log.line-w.log.quotaGets*2,2,'the local recovery itself calls no LINE API');
 });
 
-test('a late cron that sends at JST 23:59:59 and is accepted at 00:00:01 holds the acceptance day even if the row save fails',async t=>{
- const sendAt=Date.parse('2026-10-05T14:59:59Z'); // JST 10-05 23:59:59
- const acceptedAt=sendAt+2000;                     // JST 10-06 00:00:01
+test('a late cron that starts at JST 20:59:59 and is accepted at 21:00:01 holds that JST day even if the row save fails',async t=>{
+ const sendAt=Date.parse('2026-10-05T11:59:59Z'); // JST 10-05 20:59:59, still inside the window
+ const acceptedAt=sendAt+2000;                     // JST 10-05 21:00:01
+ assert.equal(jstDay(acceptedAt),jstDay(sendAt),'a push started before 21:00 is accepted the same JST day');
  let armed=false;
  const w=await world(t,{n:1,T0:sendAt,lineStatus:now=>{if(now===sendAt){w.clock.now=acceptedAt;armed=true;}return 200;}});const [a]=w.stores;
  await seedDraft(w.ctx,a,'r1',sendAt-2*H);
@@ -103,10 +105,59 @@ test('a late cron that sends at JST 23:59:59 and is accepted at 00:00:01 holds t
  const day2=Date.parse('2026-10-06T00:00:00Z'); // JST 10-06 09:00
  await seedDraft(w.ctx,a,'r2',day2-2*H);
  w.clock.now=day2;
+ await w.runUntil(Date.parse('2026-10-06T03:00:00Z')); // JST 10-06 12:00
+ assert.equal(w.log.pushes.length,2,'r2 went out on JST 10-06');
+ await seedDraft(w.ctx,a,'r3',w.clock.now); // fetched after r2's LINE
  await w.runUntil(Date.parse('2026-10-06T14:55:00Z')); // JST 23:55
  const closed=await w.db.prepare("SELECT state,last_attempt_at FROM notification_jobs WHERE day_key='2026-10-05'").first();
  assert.deepEqual([closed.state,closed.last_attempt_at],['accepted',acceptedAt],'the local recovery keeps the acceptance time');
- assert.equal(w.log.pushes.length,1,'no second LINE accepted on JST 10-06: '+JSON.stringify(w.log.pushes.map(p=>iso(p.at))));
+ assert.deepEqual(w.log.pushes.map(p=>jstDay(p.at)),['2026-10-05','2026-10-06'],'one LINE on JST 10-06, no second one: '+JSON.stringify(w.log.pushes.map(p=>iso(p.at))));
  await w.slot(Date.parse('2026-10-07T00:15:00Z')); // JST 10-07 09:15
- assert.deepEqual(w.log.pushes.map(p=>jstDay(p.at)),['2026-10-06','2026-10-07']);
+ assert.deepEqual(w.log.pushes.map(p=>jstDay(p.at)),['2026-10-05','2026-10-06','2026-10-07'],'the draft that came after the 10-06 LINE goes out the next JST day');
+});
+
+// Codex review: the first attempt at JST 09:00 fails, a late cron retries at
+// JST 23:59:59, LINE accepts at 00:00:01 and the response is lost.
+// last_attempt_at would stay on the earlier day, the 24-hour stop would end it
+// in the first slot after 09:00 and a new digest would follow, two LINEs on one
+// JST day. From JST 21:00 LINE is not
+// called at all, so a push started before 21:00 cannot be accepted the next day.
+test('a late cron retry at JST 23:59:59 does not call LINE, so a lost acceptance after midnight cannot give two LINEs on one JST day',async t=>{
+ const first=Date.parse('2026-10-05T00:00:00Z');  // JST 10-05 09:00
+ const lateSlot=Date.parse('2026-10-05T14:55:00Z'); // JST 23:55 notify slot
+ const sendAt=Date.parse('2026-10-05T14:59:59Z');   // its late run, JST 23:59:59
+ const acceptedAt=sendAt+2000;                      // JST 10-06 00:00:01
+ let w;
+ w=await world(t,{n:1,T0:first,lineStatus:now=>{
+  if(now<sendAt)return 'timeout';
+  if(now===sendAt){w.clock.now=acceptedAt;return 'accepted-timeout';} // accepted, response lost
+  return 200;
+ }});
+ const [a]=w.stores;
+ await seedDraft(w.ctx,a,'r1',first-2*H);
+ await w.runUntil(lateSlot-SLOT); // every LINE call of JST 10-05 times out
+ const calls=w.log.pushCalls.length;
+ assert.ok(calls>=3,'the digest was retried on JST 10-05: '+calls);
+ const lastCall=w.log.pushCalls.at(-1).at;
+ assert.ok(jstHour(lastCall)<21,'the last call of JST 10-05 is before 21:00: '+iso(lastCall));
+ // The first attempt counts from 09:00 (so the 24-hour stop ends it before any
+ // retry the next morning); the retry is due in the 23:55 slot, whose run
+ // starts late at 23:59:59.
+ await w.db.prepare('UPDATE notification_jobs SET first_attempt_at=?,next_attempt_at=?').bind(first,lateSlot-M).run();
+ w.clock.now=sendAt;
+ await runSelfScheduled(w.ctx,{scheduledTime:lateSlot});
+ await sendSelfDigest(w.ctx,a.id);
+ assert.equal(w.log.pushCalls.length,calls,'no LINE call at JST 23:59:59');
+ assert.equal(w.log.pushes.length,0);
+ const row=await w.db.prepare('SELECT state,last_attempt_at FROM notification_jobs').first();
+ assert.deepEqual([row.state,row.last_attempt_at],['pending',lastCall],'last_attempt_at is the real last call');
+ // JST 10-06: a new draft is waiting all day.
+ await seedDraft(w.ctx,a,'r2',Date.parse('2026-10-05T22:00:00Z')); // JST 10-06 07:00
+ w.clock.now=Date.parse('2026-10-05T15:00:00Z');
+ await w.runUntil(Date.parse('2026-10-06T14:55:00Z')); // JST 10-06 23:55
+ const today=w.log.pushes.filter(p=>jstDay(p.at)==='2026-10-06');
+ assert.equal(today.length,1,'one LINE on JST 10-06: '+JSON.stringify(w.log.pushes.map(p=>iso(p.at))));
+ for(const p of w.log.pushCalls)assert.ok(jstHour(p.at)>=9&&jstHour(p.at)<21,'LINE is called only from JST 09:00 to 20:59: '+iso(p.at));
+ const rows=(await w.db.prepare('SELECT day_key,state FROM notification_jobs ORDER BY day_key').all()).results.map(r=>[r.day_key,r.state]);
+ assert.deepEqual(rows,[['2026-10-05','unknown'],['2026-10-06','accepted']],'the ambiguous digest ends at the 24-hour stop without a push; the new draft goes out on JST 10-06');
 });

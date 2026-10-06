@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {H,M,SLOT,jstDay,iso,world,seedDraft,tenReviews,deliveryInvariants} from '../support/schedule-world.mjs';
-import {ROLES,slotRole,legacyCronDue} from '../../worker/self-service/scheduled.mjs';
+import {H,M,SLOT,jstDay,jstHour,iso,world,seedDraft,tenReviews,deliveryInvariants} from '../support/schedule-world.mjs';
+import {ROLES,slotRole,legacyCronDue,pickNotifyStore} from '../../worker/self-service/scheduled.mjs';
+import {LIMITS} from '../../worker/self-service/contracts.mjs';
 import {pollSelfStore,processSelfJobs} from '../../worker/self-service/ingestion.mjs';
 import {sendSelfDigest} from '../../worker/self-service/notifications.mjs';
 import {seal,tokenKey} from '../../worker/self-service/crypto.mjs';
@@ -44,6 +45,49 @@ test('before JST 09:00 neither a due retry nor a new digest is sent; at 09:15 th
  assert.deepEqual(w.log.pushes.map(p=>p.to),['line-0'],'the retry due before 09:00 is chosen before a new digest, which waits from 09:00');
  await w.slot(T0+50*M); // JST 09:45
  assert.deepEqual(w.log.pushes.map(p=>p.to),['line-0','line-1']);
+});
+
+test('from JST 21:00 neither a due retry nor a new digest is sent; at 09:15 next morning the retry goes first',async t=>{
+ const T0=Date.parse('2026-10-05T11:59:59Z'); // JST 20:59:59
+ const w=await world(t,{n:2,T0});const [a,b]=w.stores;
+ await seedDraft(w.ctx,b,'b-old',T0-20*H);
+ await seedDraft(w.ctx,a,'a-1',T0-12*H);
+ const id='digest:'+a.id+':2026-10-05';
+ await w.db.prepare("INSERT INTO notification_jobs(id,store_id,generation,day_key,part,retry_key,payload_ciphertext,state,first_attempt_at,last_attempt_at,expires_at,attempt_no,next_attempt_at) VALUES (?,?,?,?,0,?,?,'pending',?,?,?,1,?)")
+  .bind(id,a.id,a.generation,'2026-10-05',crypto.randomUUID(),await seal(JSON.stringify({to:'line-0',messages:[{type:'text',text:'架空'}]}),tokenKey(w.ctx),'notification:'+id),T0-10*H,T0-10*H,T0+86400000,T0-M).run();
+ await w.db.prepare("INSERT INTO notification_items VALUES (?,?)").bind(id,'ss_a-1').run();
+ assert.deepEqual(await pickNotifyStore(w.ctx),{id:b.id},'JST 20:59:59 is still inside the window (B has waited since 09:00)');
+ w.clock.now=T0+1000; // JST 21:00:00
+ assert.equal(await pickNotifyStore(w.ctx),null,'JST 21:00 is outside the window');
+ await sendSelfDigest(w.ctx,a.id);await sendSelfDigest(w.ctx,b.id);
+ for(const m of [15,45,55,75,105,115])await w.slot(Date.parse('2026-10-05T12:00:00Z')+m*M); // JST 21:15 ... 22:55
+ await w.slot(Date.parse('2026-10-05T14:55:00Z')); // JST 23:55
+ assert.equal(w.log.line,0,'nothing is sent from JST 21:00, retries included');
+ await w.slot(Date.parse('2026-10-06T00:15:00Z')); // JST 10-06 09:15
+ assert.deepEqual(w.log.pushes.map(p=>p.to),['line-0'],'the retry due since 20:58 goes before a new digest, which waits from 09:00');
+ await w.slot(Date.parse('2026-10-06T00:45:00Z')); // JST 09:45
+ assert.deepEqual(w.log.pushes.map(p=>p.to),['line-0','line-1']);
+ assert.ok(w.log.pushCalls.every(p=>jstHour(p.at)>=9&&jstHour(p.at)<21));
+ assert.equal(LIMITS.notifyEndHourJst,21,'the window end is one constant');
+});
+
+test('a page token rejected with 400 still counts as a poll: the next poll slot goes to another store and the store waits 2 h',async t=>{
+ const T0=Date.parse('2026-10-06T01:05:00Z'); // :05 poll slot
+ const w=await world(t,{n:2,T0,listStatus:(loc,token)=>token==='stale'?400:200});
+ const [a,b]=w.stores;
+ await w.db.prepare('UPDATE stores SET last_polled_at=? WHERE id=?').bind(T0-3*H,a.id).run();
+ await w.db.prepare('UPDATE stores SET last_polled_at=? WHERE id=?').bind(T0-150*M,b.id).run();
+ await w.db.prepare('INSERT INTO poll_cursors(store_id,page_token,scan_started_at,latest_completed_at,cutoff_at) VALUES (?,?,?,?,?)').bind(a.id,'stale',T0-3*H,null,T0-60*86400000).run();
+ assert.deepEqual(await w.slot(T0),{role:'poll',did:true});
+ const after=await w.db.prepare('SELECT s.last_polled_at,c.page_token FROM stores s JOIN poll_cursors c ON c.store_id=s.id WHERE s.id=?').bind(a.id).first();
+ assert.deepEqual([after.last_polled_at,after.page_token],[T0,null],'the rejected token is dropped and the poll is recorded');
+ await w.slot(T0+30*M); // :35
+ assert.deepEqual(w.log.googleList.map(x=>[x.loc,x.pageToken]),[[1,'stale'],[2,null]],'the next poll slot goes to the other store');
+ w.clock.now=T0+35*M;
+ await w.runUntil(T0+2*H);
+ const aPolls=w.log.googleList.filter(x=>x.loc===1);
+ assert.deepEqual(aPolls.map(x=>(x.at-T0)/H),[0,2],'store A waits the 2-hour minimum');
+ assert.equal(aPolls.at(-1).pageToken,null,'then restarts its scan from the first page');
 });
 
 test('a retry of yesterday\'s digest accepted today blocks a second digest the same JST day',async t=>{
@@ -194,8 +238,8 @@ async function seedRetry(w,store,{day,reply,attemptNo,firstAt,lastAt=firstAt,due
  await w.db.prepare("INSERT INTO notification_items VALUES (?,?)").bind(id,reply).run();
 }
 
-test('a digest blocked at JST 23:55 does not hold the next JST day',async t=>{
- const T0=Date.parse('2026-10-05T14:55:00Z'); // JST 10-05 23:55, a notify slot
+test('a digest blocked at JST 20:55 does not hold the next JST day',async t=>{
+ const T0=Date.parse('2026-10-05T11:55:00Z'); // JST 10-05 20:55, the last notify slot before 21:00
  let down=true;
  const w=await world(t,{n:1,T0,lineStatus:()=>down?429:200});const [a]=w.stores;
  await seedDraft(w.ctx,a,'a-1',T0-12*H);
@@ -203,19 +247,29 @@ test('a digest blocked at JST 23:55 does not hold the next JST day',async t=>{
  await w.slot(T0);
  const blocked=await w.db.prepare('SELECT state,next_attempt_at FROM notification_jobs').first();
  assert.equal(blocked.state,'blocked','the fifth 429 stops the digest');
- assert.equal(jstDay(blocked.next_attempt_at),'2026-10-06','the backoff ends after JST midnight');
- assert.equal((await w.db.prepare('SELECT last_attempt_at FROM notification_jobs').first()).last_attempt_at,T0,'the last attempt is JST 10-05 23:55');
+ assert.ok(jstHour(blocked.next_attempt_at)>=21,'the backoff ends after the JST 21:00 window end: '+iso(blocked.next_attempt_at));
+ assert.equal((await w.db.prepare('SELECT last_attempt_at FROM notification_jobs').first()).last_attempt_at,T0,'the last attempt is JST 10-05 20:55');
  down=false;
  const day2=Date.parse('2026-10-06T01:15:00Z'); // JST 10-06 10:15
  await seedDraft(w.ctx,a,'a-2',day2-2*H);
  await w.slot(day2);
  assert.deepEqual(w.log.pushes.map(p=>jstDay(p.at)),['2026-10-06'],'a new digest goes out on the next JST day');
  assert.equal((await w.db.prepare("SELECT state FROM notification_jobs WHERE day_key='2026-10-06'").first()).state,'accepted');
+ // A row the code before the 21:00 window blocked at JST 23:55, whose backoff
+ // ends after JST midnight, does not hold the next JST day either.
+ const w2=await world(t,{n:1,T0:Date.parse('2026-10-05T14:55:00Z')});const [b]=w2.stores;
+ await seedDraft(w2.ctx,b,'b-1',w2.clock.now-12*H);
+ await seedRetry(w2,b,{day:'2026-10-05',reply:'ss_b-1',attemptNo:5,firstAt:w2.clock.now-10*H,lastAt:w2.clock.now,dueAt:w2.clock.now+30*M});
+ await w2.db.prepare("UPDATE notification_jobs SET state='blocked'").run();
+ assert.equal(jstDay((await w2.db.prepare('SELECT next_attempt_at FROM notification_jobs').first()).next_attempt_at),'2026-10-06','the backoff ends after JST midnight');
+ await seedDraft(w2.ctx,b,'b-2',day2-2*H);
+ await w2.slot(day2);
+ assert.deepEqual(w2.log.pushes.map(p=>jstDay(p.at)),['2026-10-06'],'a new digest goes out on the next JST day');
 });
 
-test('a digest stopped at 24 h after a timeout at JST 23:55 does not hold the next JST day',async t=>{
+test('a digest stopped at 24 h after a timeout at JST 20:55 does not hold the next JST day',async t=>{
  const day1=Date.parse('2026-10-05T00:15:00Z'); // JST 10-05 09:15 (first attempt)
- const T0=Date.parse('2026-10-05T14:55:00Z'); // JST 10-05 23:55, a notify slot
+ const T0=Date.parse('2026-10-05T11:55:00Z'); // JST 10-05 20:55, the last notify slot before 21:00
  let down=true;
  const w=await world(t,{n:1,T0,lineStatus:()=>down?'timeout':200});const [a]=w.stores;
  await seedDraft(w.ctx,a,'a-1',day1-2*H);
@@ -223,9 +277,11 @@ test('a digest stopped at 24 h after a timeout at JST 23:55 does not hold the ne
  await w.slot(T0);
  const waiting=await w.db.prepare('SELECT state,next_attempt_at FROM notification_jobs').first();
  assert.equal(waiting.state,'pending');
- assert.equal(jstDay(waiting.next_attempt_at),'2026-10-06','the 30-minute wait ends after JST midnight');
- assert.equal((await w.db.prepare('SELECT last_attempt_at FROM notification_jobs').first()).last_attempt_at,T0,'the last attempt is JST 10-05 23:55');
+ assert.ok(jstHour(waiting.next_attempt_at)>=21,'the 30-minute wait ends after the JST 21:00 window end: '+iso(waiting.next_attempt_at));
+ assert.equal((await w.db.prepare('SELECT last_attempt_at FROM notification_jobs').first()).last_attempt_at,T0,'the last attempt is JST 10-05 20:55');
  down=false;
+ for(const m of [20,50,60])await w.slot(T0+m*M); // JST 21:15, 21:45, 21:55: due, but outside the window
+ assert.equal(w.log.pushCalls.length,1,'no retry after JST 21:00');
  const day2=Date.parse('2026-10-06T00:15:00Z'); // JST 10-06 09:15: the 24-hour stop, no push
  await seedDraft(w.ctx,a,'a-2',day2-2*H);
  await w.slot(day2);

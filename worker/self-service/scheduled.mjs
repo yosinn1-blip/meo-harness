@@ -76,6 +76,7 @@ async function runDraft(ctx) {
   return (await processSelfJobs(ctx, { limit: 1 })) > 0;
 }
 
+// Only from JST 09:00 to 20:59 (LIMITS.notifyEndHourJst), retries included.
 // The store that has waited longest since it became deliverable: a due digest
 // retry waits from its due time, a new digest from max(oldest draft + the
 // minimum age, JST 09:00 today). A retry is re-due after every attempt, so a
@@ -85,7 +86,7 @@ async function runDraft(ctx) {
 // already used, are never picked.
 export async function pickNotifyStore(ctx) {
   const now = ctx.now();
-  if (jstHour(now) < 9) return null;
+  if (jstHour(now) < 9 || jstHour(now) >= LIMITS.notifyEndHourJst) return null;
   return ctx.db
     .prepare(
       `WITH d AS (SELECT r.store_id,count(*) c,MIN(j.created_at) oldest FROM replies r JOIN review_jobs j ON j.id=r.job_id JOIN stores s ON s.id=r.store_id

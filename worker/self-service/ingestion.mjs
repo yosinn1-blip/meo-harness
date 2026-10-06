@@ -43,10 +43,17 @@ export async function pollSelfStore(ctx, storeId) {
       });
     } catch (e) {
       if (pageToken && e.status === 400) {
-        await ctx.db
-          .prepare("UPDATE poll_cursors SET page_token=NULL WHERE store_id=?")
-          .bind(storeId)
-          .run();
+        // A rejected page token restarts the scan at the next poll. It still
+        // counts as this store's poll, so the next poll slot goes to another
+        // store and this one waits the 2-hour minimum.
+        await ctx.db.batch([
+          ctx.db
+            .prepare("UPDATE poll_cursors SET page_token=NULL WHERE store_id=?")
+            .bind(storeId),
+          ctx.db
+            .prepare("UPDATE stores SET last_polled_at=? WHERE id=?")
+            .bind(ctx.now(), storeId),
+        ]);
         return;
       }
       throw e;

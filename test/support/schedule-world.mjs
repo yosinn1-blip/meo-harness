@@ -14,10 +14,10 @@ export const jstHour=t=>new Date(t+9*H).getUTCHours();
 export const jstDay=t=>new Date(t+9*H).toISOString().slice(0,10);
 export const iso=t=>new Date(t).toISOString();
 
-export async function world(t,{n,T0,env={},reviewsFor=()=>[],lineStatus=()=>200,quota=()=>({type:'limited',value:100000})}){
+export async function world(t,{n,T0,env={},reviewsFor=()=>[],listStatus=()=>200,lineStatus=()=>200,quota=()=>({type:'limited',value:100000})}){
  const {db}=await withD1(t);await applySchema(db);
  const clock={now:T0};
- const log={groq:0,google:0,googleList:[],quotaGets:0,line:0,pushes:[],acceptedKeys:new Set()};
+ const log={groq:0,google:0,googleList:[],quotaGets:0,line:0,pushes:[],pushCalls:[],acceptedKeys:new Set()};
  const ctx=createSelfContext(fixtureEnv(db,{SELF_MAX_ACTIVE_STORES:String(Math.max(n,1)),SELF_MONTHLY_DRAFT_LIMIT:'30',SELF_MONTHLY_PUSH_LIMIT:'1000',...env}),{now:()=>clock.now,fetchImpl:async(u,init={})=>{
   const url=new URL(u);
   if(url.hostname==='oauth2.googleapis.com'){log.google++;return Response.json({access_token:'fixture'});}
@@ -28,6 +28,8 @@ export async function world(t,{n,T0,env={},reviewsFor=()=>[],lineStatus=()=>200,
    const loc=Number(url.pathname.match(/\/locations\/(\d+)\/reviews$/)[1]);
    const size=Number(url.searchParams.get('pageSize')),offset=Number(url.searchParams.get('pageToken')??0);
    log.googleList.push({loc,at:clock.now,pageToken:url.searchParams.get('pageToken'),size});
+   const listed=listStatus(loc,url.searchParams.get('pageToken'));
+   if(listed!==200)return Response.json({error:{code:listed}},{status:listed});
    const all=reviewsFor(loc,clock.now).filter(r=>Date.parse(r.createTime)<=clock.now).sort((a,b)=>Date.parse(b.updateTime)-Date.parse(a.updateTime));
    return Response.json({reviews:all.slice(offset,offset+size),...(offset+size<all.length?{nextPageToken:String(offset+size)}:{})});
   }
@@ -36,6 +38,7 @@ export async function world(t,{n,T0,env={},reviewsFor=()=>[],lineStatus=()=>200,
   if(url.pathname.endsWith('/quota')){log.quotaGets++;return Response.json(quota());}
   if(url.pathname.endsWith('/consumption'))return Response.json({totalUsage:log.pushes.length});
   assert.ok(url.pathname.endsWith('/push'));
+  log.pushCalls.push({to:JSON.parse(init.body).to,at:clock.now}); // every push call, accepted or not
   // Like LINE, a repeated X-Line-Retry-Key of an accepted push is not sent
   // again: 409 with the accepted request id. 'timeout' throws before LINE
   // accepts; 'accepted-timeout' throws after LINE accepted (lost response).
@@ -77,6 +80,7 @@ export async function seedDraft(ctx,store,id,createdAt){
 export const tenReviews=T0=>(loc)=>Array.from({length:10},(_,k)=>({reviewId:'r'+loc+'-'+k,starRating:'FIVE',comment:'良かったです'+k,reviewer:{displayName:'架空利用者'},createTime:iso(T0-(k+1)*H),updateTime:iso(T0-(k+1)*H)}));
 export async function deliveryInvariants(w){
  for(const p of w.log.pushes)assert.ok(jstHour(p.at)>=9,'no push before JST 09:00: '+iso(p.at));
+ for(const p of w.log.pushCalls)assert.ok(jstHour(p.at)>=9&&jstHour(p.at)<21,'LINE push is called only from JST 09:00 to 20:59: '+iso(p.at));
  const perDay=new Map();
  for(const p of w.log.pushes){const k=p.to+'@'+jstDay(p.at);perDay.set(k,(perDay.get(k)??0)+1);}
  for(const [k,c] of perDay)assert.equal(c,1,'one LINE per store per JST day: '+k);
