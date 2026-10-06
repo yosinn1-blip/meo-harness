@@ -137,3 +137,49 @@ test('legacy KV work runs only in the :00 slot: 24 of 288 runs a day',async t=>{
  await worker.scheduled({},env,{});
  assert.deepEqual(lists.map(x=>x.prefix),['pending:','store:'],'a call without scheduledTime keeps the old behaviour');
 });
+
+test('a store whose LINE push keeps timing out yields notify slots to other stores',async t=>{
+ const T0=Date.parse('2026-10-06T01:15:00Z'); // JST 10:15, a notify slot
+ let aCalls=0;
+ const w=await world(t,{n:2,T0,lineStatus:(now,init)=>{if(JSON.parse(init.body).to!=='line-0')return 200;aCalls++;return 'timeout';}});
+ const [a,b]=w.stores;
+ await seedDraft(w.ctx,a,'a-1',T0-3*H); // older, so store A goes first
+ await seedDraft(w.ctx,b,'b-1',T0-2*H);
+ await w.runUntil(T0+2*H);
+ assert.deepEqual(w.log.pushes.map(p=>p.to),['line-1'],'store B is notified while store A keeps timing out');
+ assert.ok(aCalls>=2&&aCalls<=5,'store A retries with a wait, not every slot: '+aCalls);
+ const held=await w.db.prepare('SELECT state,retry_key,attempt_no,first_attempt_at FROM notification_jobs WHERE store_id=?').bind(a.id).first();
+ assert.deepEqual([held.state,held.attempt_no,held.first_attempt_at],['pending',0,T0],'same reservation and retry key, first attempt kept');
+ // The 24-hour safety stop still ends the ambiguous digest without another push.
+ const before=aCalls;
+ await w.slot(T0+24*H);
+ assert.equal(aCalls,before);
+ const ended=await w.db.prepare('SELECT state,retry_key FROM notification_jobs WHERE store_id=?').bind(a.id).first();
+ assert.deepEqual([ended.state,ended.retry_key],['unknown',held.retry_key]);
+});
+
+test('a lost response to yesterday\'s digest retried today still uses today, even after the 24-hour stop',async t=>{
+ const day1=Date.parse('2026-10-05T00:15:00Z'); // JST 10-05 09:15
+ const jstMidnight=Date.parse('2026-10-05T15:00:00Z'); // JST 10-06 00:00
+ let w,todayCalls=0;const seen=[];
+ w=await world(t,{n:1,T0:day1,lineStatus:async now=>{
+  if(now<jstMidnight)return 'timeout';
+  seen.push({at:now,row:await w.db.prepare('SELECT next_attempt_at FROM notification_jobs').first()});
+  return todayCalls++===0?'accepted-timeout':200;
+ }});
+ const [a]=w.stores;
+ await seedDraft(w.ctx,a,'r1',day1-2*H);
+ await w.runUntil(jstMidnight-SLOT);
+ assert.equal(w.log.pushes.length,0);
+ await seedDraft(w.ctx,a,'r2',Date.parse('2026-10-05T22:00:00Z'));
+ w.clock.now=Date.parse('2026-10-05T23:55:00Z');
+ await w.runUntil(Date.parse('2026-10-06T02:00:00Z'));
+ assert.ok(seen.length>=1);
+ assert.equal(seen[0].row.next_attempt_at,seen[0].at,'the attempt time is written before LINE is called');
+ const today=w.log.pushes.filter(p=>jstDay(p.at)==='2026-10-06');
+ assert.equal(today.length,1,'one LINE on JST 10-06: '+JSON.stringify(w.log.pushes.map(p=>iso(p.at))));
+ assert.equal((await w.db.prepare("SELECT state FROM notification_jobs WHERE day_key='2026-10-05'").first()).state,'unknown');
+ assert.equal((await w.db.prepare('SELECT count(*) n FROM notification_jobs').first()).n,1,'no new digest the same JST day');
+ await w.slot(Date.parse('2026-10-07T00:15:00Z')); // JST 10-07 09:15
+ assert.equal(w.log.pushes.length,2,'the waiting draft goes out the next JST day');
+});

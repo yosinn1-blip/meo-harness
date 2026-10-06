@@ -154,6 +154,11 @@ test("one draft unit creates one reply and retains the rest; LINE timeout retrie
     () => sendSelfDigest(ctx, store.id),
     (e) => e.code === "LINE_RESULT_UNKNOWN",
   );
+  // An unknown result waits 30 min before the same digest is retried.
+  const unknownAt = ctx.now();
+  await sendSelfDigest(ctx, store.id);
+  assert.equal(calls.push.length, 1, "no retry while the wait lasts");
+  ctx.now = () => unknownAt + 30 * 60000;
   await sendSelfDigest(ctx, store.id);
   assert.equal(calls.push.length, 2);
   assert.deepEqual(calls.push[0], calls.push[1]);
@@ -258,6 +263,8 @@ test("LINE accepted then notification DB update fails: retry sends no second pus
     },
   };
   await assert.rejects(() => sendSelfDigest(ctx, store.id));
+  const failedAt = ctx.now();
+  ctx.now = () => failedAt + 30 * 60000;
   await sendSelfDigest(ctx, store.id);
   assert.equal(calls.push.length, 1);
   assert.equal(

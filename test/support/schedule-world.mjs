@@ -17,7 +17,7 @@ export const iso=t=>new Date(t).toISOString();
 export async function world(t,{n,T0,env={},reviewsFor=()=>[],lineStatus=()=>200,quota=()=>({type:'limited',value:100000})}){
  const {db}=await withD1(t);await applySchema(db);
  const clock={now:T0};
- const log={groq:0,google:0,googleList:[],quotaGets:0,line:0,pushes:[]};
+ const log={groq:0,google:0,googleList:[],quotaGets:0,line:0,pushes:[],acceptedKeys:new Set()};
  const ctx=createSelfContext(fixtureEnv(db,{SELF_MAX_ACTIVE_STORES:String(Math.max(n,1)),SELF_MONTHLY_DRAFT_LIMIT:'30',SELF_MONTHLY_PUSH_LIMIT:'1000',...env}),{now:()=>clock.now,fetchImpl:async(u,init={})=>{
   const url=new URL(u);
   if(url.hostname==='oauth2.googleapis.com'){log.google++;return Response.json({access_token:'fixture'});}
@@ -36,8 +36,14 @@ export async function world(t,{n,T0,env={},reviewsFor=()=>[],lineStatus=()=>200,
   if(url.pathname.endsWith('/quota')){log.quotaGets++;return Response.json(quota());}
   if(url.pathname.endsWith('/consumption'))return Response.json({totalUsage:log.pushes.length});
   assert.ok(url.pathname.endsWith('/push'));
-  const status=lineStatus(clock.now);
-  if(status===200)log.pushes.push({to:JSON.parse(init.body).to,at:clock.now});
+  // Like LINE, a repeated X-Line-Retry-Key of an accepted push is not sent
+  // again: 409 with the accepted request id. 'timeout' throws before LINE
+  // accepts; 'accepted-timeout' throws after LINE accepted (lost response).
+  const retryKey=init.headers?.['X-Line-Retry-Key'];
+  if(retryKey&&log.acceptedKeys.has(retryKey))return Response.json({},{status:409,headers:{'x-line-accepted-request-id':'req-'+retryKey}});
+  const status=await lineStatus(clock.now,init);
+  if(status===200||status==='accepted-timeout'){log.pushes.push({to:JSON.parse(init.body).to,at:clock.now});if(retryKey)log.acceptedKeys.add(retryKey);}
+  if(status==='timeout'||status==='accepted-timeout')throw new DOMException('The operation timed out.','TimeoutError');
   return Response.json({},{status});
  }});
  const stores=[];

@@ -7,10 +7,12 @@ import { reservePush, sendReservedPush } from "./budget.mjs";
 import { buildFlexPayload } from "../../src/line-flex.mjs";
 import { ensure } from "./errors.mjs";
 // A store's JST day is used by any digest keyed to it, or by any digest that
-// was attempted or accepted on it. No migration: next_attempt_at is only read
-// for state='pending' claims, so an accepted row stores its acceptance time
-// there; a failed attempt stores attempt time + at most 30 min backoff (or the
-// 1 h quota hold), which can only over-hold, never allow a second LINE.
+// was attempted or accepted on it. No migration: next_attempt_at doubles as the
+// last attempt time. Every claim writes the claim time there before LINE is
+// called (so a lost response or a dead isolate still marks the day), an
+// accepted row stores its acceptance time, and a failed attempt stores attempt
+// time + backoff (or the 1 h quota hold), which can only over-hold, never
+// allow a second LINE.
 export function usedDaySql(dayParam, dayStartParam) {
   return `(n.day_key=${dayParam} OR n.first_attempt_at>=${dayStartParam} OR (n.first_attempt_at IS NOT NULL AND n.next_attempt_at>=${dayStartParam}))`;
 }
@@ -136,9 +138,10 @@ export async function sendSelfDigest(ctx, storeId) {
   const lease = crypto.randomUUID();
   const claim = await ctx.db
     .prepare(
-      "UPDATE notification_jobs SET lease_id=?,lease_until=? WHERE id=? AND state='pending' AND next_attempt_at<=? AND (lease_until IS NULL OR lease_until<=?) RETURNING *",
+      // next_attempt_at := attempt time, written before any external call.
+      "UPDATE notification_jobs SET lease_id=?,lease_until=?,next_attempt_at=? WHERE id=? AND state='pending' AND next_attempt_at<=? AND (lease_until IS NULL OR lease_until<=?) RETURNING *",
     )
-    .bind(lease, ctx.now() + 60000, notification.id, ctx.now(), ctx.now())
+    .bind(lease, ctx.now() + 60000, ctx.now(), notification.id, ctx.now(), ctx.now())
     .first();
   if (!claim) return;
   notification = claim;
@@ -213,6 +216,17 @@ export async function sendSelfDigest(ctx, storeId) {
           lease,
         )
         .run();
+    } else {
+      // Result unknown (timeout/5xx) or an unexpected failure: keep the same
+      // reservation and retry key (LINE de-duplicates it) and the 24 h stop,
+      // but wait 30 min so this digest does not take every notify slot.
+      await ctx.db
+        .prepare(
+          "UPDATE notification_jobs SET next_attempt_at=? WHERE id=? AND lease_id=?",
+        )
+        .bind(ctx.now() + 1800000, notification.id, lease)
+        .run()
+        .catch(() => {});
     }
     throw e;
   } finally {
