@@ -106,7 +106,9 @@ export async function reservePush(ctx, { id, storeId }) {
     .prepare("SELECT state,period FROM usage_reservations WHERE id=?")
     .bind(id)
     .first();
-  if (prior?.state === "committed") return { ok: true, code: "RESERVED" };
+  // committed: LINE already accepted this reservation; nothing will be sent.
+  if (prior?.state === "committed")
+    return { ok: true, code: "RESERVED", committed: true };
   if (prior?.state === "released")
     return { ok: false, code: "RESERVATION_RELEASED" };
   if (prior && prior.period !== period)
@@ -191,7 +193,8 @@ export async function sendReservedPush(ctx, { id, to, messages, retryKey }) {
     "RESERVATION_REQUIRED",
     409,
   );
-  if (reservation.state === "committed") return { accepted: true };
+  // local: accepted earlier, LINE is not called again.
+  if (reservation.state === "committed") return { accepted: true, local: true };
   let response;
   try {
     response = await ctx.fetchImpl("https://api.line.me/v2/bot/message/push", {

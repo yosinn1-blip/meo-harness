@@ -76,9 +76,12 @@ async function runDraft(ctx) {
   return (await processSelfJobs(ctx, { limit: 1 })) > 0;
 }
 
-// The store with a due digest retry first, otherwise the store whose
-// deliverable drafts have waited longest. Stores with nothing to deliver, or
-// whose JST day is already used, are never picked.
+// The store that has waited longest since it became deliverable: a due digest
+// retry waits from its due time, a new digest from max(oldest draft + the
+// minimum age, JST 09:00 today). A retry is re-due after every attempt, so a
+// store whose LINE keeps failing can never keep a waiting new digest out (a
+// tie goes to the retry). Stores with nothing to deliver, or whose JST day is
+// already used, are never picked.
 export async function pickNotifyStore(ctx) {
   const now = ctx.now();
   if (jstHour(now) < 9) return null;
@@ -96,7 +99,7 @@ WHERE s.state='active' AND s.line_user_id IS NOT NULL AND (t.store_id IS NOT NUL
  d.store_id IS NOT NULL AND d.oldest<=?2 AND (d.c>=5 OR COALESCE(u.c,0)=0 OR d.oldest<=?3)
  AND NOT EXISTS (SELECT 1 FROM notification_jobs n WHERE n.store_id=s.id AND ${usedDaySql("?4", "?5")})
  AND NOT EXISTS (SELECT 1 FROM notification_jobs n WHERE n.store_id=s.id AND n.generation=s.generation AND n.state='pending' AND n.payload_ciphertext IS NOT NULL)))
-ORDER BY (t.store_id IS NULL),COALESCE(t.due,d.oldest),s.id LIMIT 1`,
+ORDER BY COALESCE(t.due,MAX(d.oldest+?6,?7)),(t.store_id IS NULL),COALESCE(t.due,d.oldest),s.id LIMIT 1`,
     )
     .bind(
       now,
@@ -104,6 +107,8 @@ ORDER BY (t.store_id IS NULL),COALESCE(t.due,d.oldest),s.id LIMIT 1`,
       now - LIMITS.notifyBatchWaitMs,
       dateKeys(now).day,
       jstDayStart(now),
+      LIMITS.notifyMinAgeMs,
+      jstDayStart(now) + 9 * 3600000,
     )
     .first();
 }

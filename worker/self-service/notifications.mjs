@@ -7,15 +7,17 @@ import { reservePush, sendReservedPush } from "./budget.mjs";
 import { buildFlexPayload } from "../../src/line-flex.mjs";
 import { ensure } from "./errors.mjs";
 // A store's JST day is used by any digest keyed to it, or by any digest that
-// was attempted or accepted on it. No migration: lease_until doubles as the
-// end of the last attempt. A claim writes claim + 60 s there before LINE is
-// called (so a lost response or a dead isolate still marks the day), and the
-// release (or acceptance) overwrites it with the release time, which is never
-// earlier than LINE could have accepted; a claim that never reached LINE
-// restores the previous value. next_attempt_at stays the retry due
-// time only: a backoff that ends after JST midnight must not hold that day.
+// was attempted or accepted on it. last_attempt_at (0006) is the time this
+// code last called LINE's push for the digest: written just before the push
+// and again on acceptance, never by a claim that did not call LINE (quota hold,
+// inactive store, or the local close of an already committed reservation).
+// next_attempt_at is only the retry due time and lease_until only the lease.
+// Rows written before 0006 have no last_attempt_at, so their retry or
+// acceptance time is unknown: such a row with a first attempt in the last
+// 24 h (the safety stop ends every attempt within 24 h of the first) holds
+// the day, which can only over-hold, never allow a second LINE.
 export function usedDaySql(dayParam, dayStartParam) {
-  return `(n.day_key=${dayParam} OR n.first_attempt_at>=${dayStartParam} OR (n.first_attempt_at IS NOT NULL AND n.lease_until>=${dayStartParam}))`;
+  return `(n.day_key=${dayParam} OR n.first_attempt_at>=${dayStartParam} OR n.last_attempt_at>=${dayStartParam} OR (n.last_attempt_at IS NULL AND n.first_attempt_at IS NOT NULL AND n.first_attempt_at>=${dayStartParam}-86400000))`;
 }
 export async function sendSelfDigest(ctx, storeId) {
   if (!readSelfConfig(ctx.env).processingEnabled) return;
@@ -137,13 +139,8 @@ export async function sendSelfDigest(ctx, storeId) {
   }
   if (notification.next_attempt_at > ctx.now()) return;
   const lease = crypto.randomUUID();
-  // An attempt that never reaches LINE (quota hold, inactive store) keeps
-  // the previous attempt's end instead of marking today.
-  const previousEnd = notification.lease_until;
-  let attempted = false;
   const claim = await ctx.db
     .prepare(
-      // lease_until marks the attempt before any external call (see usedDaySql).
       "UPDATE notification_jobs SET lease_id=?,lease_until=? WHERE id=? AND state='pending' AND next_attempt_at<=? AND (lease_until IS NULL OR lease_until<=?) RETURNING *",
     )
     .bind(lease, ctx.now() + 60000, notification.id, ctx.now(), ctx.now())
@@ -174,13 +171,17 @@ export async function sendSelfDigest(ctx, storeId) {
       "STORE_INACTIVE",
       409,
     );
-    await ctx.db
-      .prepare(
-        "UPDATE notification_jobs SET first_attempt_at=COALESCE(first_attempt_at,?) WHERE id=? AND lease_id=?",
-      )
-      .bind(ctx.now(), notification.id, lease)
-      .run();
-    attempted = true;
+    // An already committed reservation means LINE accepted this digest in an
+    // earlier attempt whose row update was lost: close it locally without
+    // calling LINE and keep that attempt's time (see usedDaySql).
+    const callsLine = !reservation.committed;
+    if (callsLine)
+      await ctx.db
+        .prepare(
+          "UPDATE notification_jobs SET first_attempt_at=COALESCE(first_attempt_at,?),last_attempt_at=? WHERE id=? AND lease_id=?",
+        )
+        .bind(ctx.now(), ctx.now(), notification.id, lease)
+        .run();
     const payload = JSON.parse(
       await unseal(
         notification.payload_ciphertext,
@@ -196,10 +197,16 @@ export async function sendSelfDigest(ctx, storeId) {
     await ctx.db.batch([
       ctx.db
         .prepare(
-          // lease_until := acceptance time (see usedDaySql).
-          "UPDATE notification_jobs SET state='accepted',accepted_request_id=?,lease_id=NULL,lease_until=? WHERE id=? AND lease_id=?",
+          // last_attempt_at := acceptance time, only when LINE was called.
+          "UPDATE notification_jobs SET state='accepted',accepted_request_id=?,last_attempt_at=CASE WHEN ? THEN ? ELSE last_attempt_at END,lease_id=NULL,lease_until=NULL WHERE id=? AND lease_id=?",
         )
-        .bind(result.requestId ?? null, ctx.now(), notification.id, lease),
+        .bind(
+          result.requestId ?? null,
+          callsLine && !result.local ? 1 : 0,
+          ctx.now(),
+          notification.id,
+          lease,
+        ),
       ctx.db
         .prepare(
           "UPDATE review_jobs SET stage='notified',updated_at=? WHERE id IN (SELECT r.job_id FROM replies r JOIN notification_items n ON n.reply_id=r.id WHERE n.notification_id=?) AND stage='draft_ready'",
@@ -236,12 +243,11 @@ export async function sendSelfDigest(ctx, storeId) {
     }
     throw e;
   } finally {
-    // lease_until := release time, the end of this attempt (see usedDaySql).
     await ctx.db
       .prepare(
-        "UPDATE notification_jobs SET lease_id=NULL,lease_until=? WHERE id=? AND lease_id=?",
+        "UPDATE notification_jobs SET lease_id=NULL,lease_until=NULL WHERE id=? AND lease_id=?",
       )
-      .bind(attempted ? ctx.now() : previousEnd, notification.id, lease)
+      .bind(notification.id, lease)
       .run();
   }
 }
