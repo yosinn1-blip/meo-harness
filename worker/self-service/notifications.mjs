@@ -7,14 +7,15 @@ import { reservePush, sendReservedPush } from "./budget.mjs";
 import { buildFlexPayload } from "../../src/line-flex.mjs";
 import { ensure } from "./errors.mjs";
 // A store's JST day is used by any digest keyed to it, or by any digest that
-// was attempted or accepted on it. No migration: next_attempt_at doubles as the
-// last attempt time. Every claim writes the claim time there before LINE is
-// called (so a lost response or a dead isolate still marks the day), an
-// accepted row stores its acceptance time, and a failed attempt stores attempt
-// time + backoff (or the 1 h quota hold), which can only over-hold, never
-// allow a second LINE.
+// was attempted or accepted on it. No migration: lease_until doubles as the
+// end of the last attempt. A claim writes claim + 60 s there before LINE is
+// called (so a lost response or a dead isolate still marks the day), and the
+// release (or acceptance) overwrites it with the release time, which is never
+// earlier than LINE could have accepted; a claim that never reached LINE
+// restores the previous value. next_attempt_at stays the retry due
+// time only: a backoff that ends after JST midnight must not hold that day.
 export function usedDaySql(dayParam, dayStartParam) {
-  return `(n.day_key=${dayParam} OR n.first_attempt_at>=${dayStartParam} OR (n.first_attempt_at IS NOT NULL AND n.next_attempt_at>=${dayStartParam}))`;
+  return `(n.day_key=${dayParam} OR n.first_attempt_at>=${dayStartParam} OR (n.first_attempt_at IS NOT NULL AND n.lease_until>=${dayStartParam}))`;
 }
 export async function sendSelfDigest(ctx, storeId) {
   if (!readSelfConfig(ctx.env).processingEnabled) return;
@@ -136,12 +137,16 @@ export async function sendSelfDigest(ctx, storeId) {
   }
   if (notification.next_attempt_at > ctx.now()) return;
   const lease = crypto.randomUUID();
+  // An attempt that never reaches LINE (quota hold, inactive store) keeps
+  // the previous attempt's end instead of marking today.
+  const previousEnd = notification.lease_until;
+  let attempted = false;
   const claim = await ctx.db
     .prepare(
-      // next_attempt_at := attempt time, written before any external call.
-      "UPDATE notification_jobs SET lease_id=?,lease_until=?,next_attempt_at=? WHERE id=? AND state='pending' AND next_attempt_at<=? AND (lease_until IS NULL OR lease_until<=?) RETURNING *",
+      // lease_until marks the attempt before any external call (see usedDaySql).
+      "UPDATE notification_jobs SET lease_id=?,lease_until=? WHERE id=? AND state='pending' AND next_attempt_at<=? AND (lease_until IS NULL OR lease_until<=?) RETURNING *",
     )
-    .bind(lease, ctx.now() + 60000, ctx.now(), notification.id, ctx.now(), ctx.now())
+    .bind(lease, ctx.now() + 60000, notification.id, ctx.now(), ctx.now())
     .first();
   if (!claim) return;
   notification = claim;
@@ -175,6 +180,7 @@ export async function sendSelfDigest(ctx, storeId) {
       )
       .bind(ctx.now(), notification.id, lease)
       .run();
+    attempted = true;
     const payload = JSON.parse(
       await unseal(
         notification.payload_ciphertext,
@@ -190,8 +196,8 @@ export async function sendSelfDigest(ctx, storeId) {
     await ctx.db.batch([
       ctx.db
         .prepare(
-          // next_attempt_at := acceptance time (see usedDaySql).
-          "UPDATE notification_jobs SET state='accepted',accepted_request_id=?,next_attempt_at=?,lease_id=NULL,lease_until=NULL WHERE id=? AND lease_id=?",
+          // lease_until := acceptance time (see usedDaySql).
+          "UPDATE notification_jobs SET state='accepted',accepted_request_id=?,lease_id=NULL,lease_until=? WHERE id=? AND lease_id=?",
         )
         .bind(result.requestId ?? null, ctx.now(), notification.id, lease),
       ctx.db
@@ -230,11 +236,12 @@ export async function sendSelfDigest(ctx, storeId) {
     }
     throw e;
   } finally {
+    // lease_until := release time, the end of this attempt (see usedDaySql).
     await ctx.db
       .prepare(
-        "UPDATE notification_jobs SET lease_id=NULL,lease_until=NULL WHERE id=? AND lease_id=?",
+        "UPDATE notification_jobs SET lease_id=NULL,lease_until=? WHERE id=? AND lease_id=?",
       )
-      .bind(notification.id, lease)
+      .bind(attempted ? ctx.now() : previousEnd, notification.id, lease)
       .run();
   }
 }

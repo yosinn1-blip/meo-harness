@@ -59,8 +59,8 @@ test('a retry of yesterday\'s digest accepted today blocks a second digest the s
  await seedDraft(w.ctx,a,'r2',day2-90*M);
  await w.slot(day2);
  assert.equal(w.log.pushes.length,1,'yesterday\'s digest is retried and accepted today');
- const accepted=await w.db.prepare("SELECT state,day_key,next_attempt_at FROM notification_jobs").first();
- assert.deepEqual([accepted.state,accepted.day_key,accepted.next_attempt_at],['accepted','2026-10-05',day2],'acceptance time is kept in next_attempt_at');
+ const accepted=await w.db.prepare("SELECT state,day_key,lease_until FROM notification_jobs").first();
+ assert.deepEqual([accepted.state,accepted.day_key,accepted.lease_until],['accepted','2026-10-05',day2],'acceptance time is kept in lease_until');
  await w.slot(day2+30*M);await w.slot(day2+40*M);
  await sendSelfDigest(w.ctx,a.id);
  assert.equal(w.log.pushes.length,1,'no second LINE on the same JST day');
@@ -164,7 +164,7 @@ test('a lost response to yesterday\'s digest retried today still uses today, eve
  let w,todayCalls=0;const seen=[];
  w=await world(t,{n:1,T0:day1,lineStatus:async now=>{
   if(now<jstMidnight)return 'timeout';
-  seen.push({at:now,row:await w.db.prepare('SELECT next_attempt_at FROM notification_jobs').first()});
+  seen.push({at:now,row:await w.db.prepare('SELECT lease_until FROM notification_jobs').first()});
   return todayCalls++===0?'accepted-timeout':200;
  }});
  const [a]=w.stores;
@@ -175,11 +175,60 @@ test('a lost response to yesterday\'s digest retried today still uses today, eve
  w.clock.now=Date.parse('2026-10-05T23:55:00Z');
  await w.runUntil(Date.parse('2026-10-06T02:00:00Z'));
  assert.ok(seen.length>=1);
- assert.equal(seen[0].row.next_attempt_at,seen[0].at,'the attempt time is written before LINE is called');
+ assert.equal(seen[0].row.lease_until,seen[0].at+M,'the attempt is marked before LINE is called');
  const today=w.log.pushes.filter(p=>jstDay(p.at)==='2026-10-06');
  assert.equal(today.length,1,'one LINE on JST 10-06: '+JSON.stringify(w.log.pushes.map(p=>iso(p.at))));
  assert.equal((await w.db.prepare("SELECT state FROM notification_jobs WHERE day_key='2026-10-05'").first()).state,'unknown');
  assert.equal((await w.db.prepare('SELECT count(*) n FROM notification_jobs').first()).n,1,'no new digest the same JST day');
  await w.slot(Date.parse('2026-10-07T00:15:00Z')); // JST 10-07 09:15
  assert.equal(w.log.pushes.length,2,'the waiting draft goes out the next JST day');
+});
+
+// The daily limit uses the time of the last attempt, never the retry due time:
+// a backoff that ends after JST midnight must not hold the next JST day.
+async function seedRetry(w,store,{day,reply,attemptNo,firstAt,dueAt}){
+ const id='digest:'+store.id+':'+day;
+ await w.db.prepare("INSERT INTO notification_jobs(id,store_id,generation,day_key,part,retry_key,payload_ciphertext,state,first_attempt_at,expires_at,attempt_no,next_attempt_at) VALUES (?,?,?,?,0,?,?,'pending',?,?,?,?)")
+  .bind(id,store.id,store.generation,day,crypto.randomUUID(),await seal(JSON.stringify({to:'line-0',messages:[{type:'text',text:'架空'}]}),tokenKey(w.ctx),'notification:'+id),firstAt,firstAt+3*86400000,attemptNo,dueAt).run();
+ await w.db.prepare("INSERT INTO notification_items VALUES (?,?)").bind(id,reply).run();
+}
+
+test('a digest blocked at JST 23:55 does not hold the next JST day',async t=>{
+ const T0=Date.parse('2026-10-05T14:55:00Z'); // JST 10-05 23:55, a notify slot
+ let down=true;
+ const w=await world(t,{n:1,T0,lineStatus:()=>down?429:200});const [a]=w.stores;
+ await seedDraft(w.ctx,a,'a-1',T0-12*H);
+ await seedRetry(w,a,{day:'2026-10-05',reply:'ss_a-1',attemptNo:4,firstAt:T0-10*H,dueAt:T0-M});
+ await w.slot(T0);
+ const blocked=await w.db.prepare('SELECT state,next_attempt_at FROM notification_jobs').first();
+ assert.equal(blocked.state,'blocked','the fifth 429 stops the digest');
+ assert.equal(jstDay(blocked.next_attempt_at),'2026-10-06','the backoff ends after JST midnight');
+ down=false;
+ const day2=Date.parse('2026-10-06T01:15:00Z'); // JST 10-06 10:15
+ await seedDraft(w.ctx,a,'a-2',day2-2*H);
+ await w.slot(day2);
+ assert.deepEqual(w.log.pushes.map(p=>jstDay(p.at)),['2026-10-06'],'a new digest goes out on the next JST day');
+ assert.equal((await w.db.prepare("SELECT state FROM notification_jobs WHERE day_key='2026-10-06'").first()).state,'accepted');
+});
+
+test('a digest stopped at 24 h after a timeout at JST 23:55 does not hold the next JST day',async t=>{
+ const day1=Date.parse('2026-10-05T00:15:00Z'); // JST 10-05 09:15 (first attempt)
+ const T0=Date.parse('2026-10-05T14:55:00Z'); // JST 10-05 23:55, a notify slot
+ let down=true;
+ const w=await world(t,{n:1,T0,lineStatus:()=>down?'timeout':200});const [a]=w.stores;
+ await seedDraft(w.ctx,a,'a-1',day1-2*H);
+ await seedRetry(w,a,{day:'2026-10-05',reply:'ss_a-1',attemptNo:0,firstAt:day1,dueAt:T0-M});
+ await w.slot(T0);
+ const waiting=await w.db.prepare('SELECT state,next_attempt_at FROM notification_jobs').first();
+ assert.equal(waiting.state,'pending');
+ assert.equal(jstDay(waiting.next_attempt_at),'2026-10-06','the 30-minute wait ends after JST midnight');
+ down=false;
+ const day2=Date.parse('2026-10-06T00:15:00Z'); // JST 10-06 09:15: the 24-hour stop, no push
+ await seedDraft(w.ctx,a,'a-2',day2-2*H);
+ await w.slot(day2);
+ assert.equal((await w.db.prepare("SELECT state FROM notification_jobs WHERE day_key='2026-10-05'").first()).state,'unknown');
+ assert.equal(w.log.pushes.length,0);
+ await w.slot(day2+30*M); // JST 09:45
+ assert.deepEqual(w.log.pushes.map(p=>jstDay(p.at)),['2026-10-06'],'a new digest goes out on the next JST day');
+ assert.equal((await w.db.prepare("SELECT state FROM notification_jobs WHERE day_key='2026-10-06'").first()).state,'accepted');
 });
