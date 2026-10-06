@@ -273,7 +273,7 @@ test("LINE accepted then notification DB update fails: retry sends no second pus
     1,
   );
 });
-test("more than 50 reviews resumes a bounded scan; old and already answered reviews are excluded", async (t) => {
+test("more than one page of reviews resumes a bounded one-page-per-run scan; old and already answered reviews are excluded", async (t) => {
   const { ctx, store } = await setup(t, { drafts: "0" });
   const fallback = ctx.fetchImpl;
   const pages = [];
@@ -282,10 +282,12 @@ test("more than 50 reviews resumes a bounded scan; old and already answered revi
     if (u.hostname !== "mybusiness.googleapis.com")
       return fallback(input, init);
     const p = Number(u.searchParams.get("pageToken") ?? 0);
+    const size = Number(u.searchParams.get("pageSize"));
+    assert.equal(size, 20, "one poll reads one 20-review page");
     pages.push(p);
     return Response.json({
-      reviews: Array.from({ length: 50 }, (_, i) => ({
-        reviewId: "r" + (p * 50 + i),
+      reviews: Array.from({ length: size }, (_, i) => ({
+        reviewId: "r" + (p * size + i),
         comment: "架空口コミ",
         starRating: "FIVE",
         createTime:
@@ -297,16 +299,22 @@ test("more than 50 reviews resumes a bounded scan; old and already answered revi
     });
   };
   await pollSelfStore(ctx, store.id);
-  assert.deepEqual(pages, [0, 1]);
+  assert.deepEqual(pages, [0]);
   assert.equal(
     (await ctx.db.prepare("SELECT count(*) n FROM review_jobs").first()).n,
-    98,
+    18,
   );
+  await pollSelfStore(ctx, store.id);
   await pollSelfStore(ctx, store.id);
   assert.deepEqual(pages, [0, 1, 2]);
   assert.equal(
     (await ctx.db.prepare("SELECT count(*) n FROM review_jobs").first()).n,
-    148,
+    58,
+  );
+  assert.equal(
+    (await ctx.db.prepare("SELECT page_token FROM poll_cursors").first()).page_token,
+    null,
+    "the scan completes on its last page",
   );
 });
 test("budget-held ungenerated review is rehydrated after retention and processed when quota returns", async (t) => {

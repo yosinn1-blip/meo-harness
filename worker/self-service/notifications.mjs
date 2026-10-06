@@ -1,13 +1,23 @@
 import { readSelfConfig } from "./config.mjs";
-import { dateKeys } from "./contracts.mjs";
+import { dateKeys, jstDayStart, jstHour } from "./contracts.mjs";
 import { getStore } from "./store-repository.mjs";
 import { storeGuard } from "./lifecycle.mjs";
 import { seal, unseal, tokenKey } from "./crypto.mjs";
 import { reservePush, sendReservedPush } from "./budget.mjs";
 import { buildFlexPayload } from "../../src/line-flex.mjs";
 import { ensure } from "./errors.mjs";
+// A store's JST day is used by any digest keyed to it, or by any digest that
+// was attempted or accepted on it. No migration: next_attempt_at is only read
+// for state='pending' claims, so an accepted row stores its acceptance time
+// there; a failed attempt stores attempt time + at most 30 min backoff (or the
+// 1 h quota hold), which can only over-hold, never allow a second LINE.
+export function usedDaySql(dayParam, dayStartParam) {
+  return `(n.day_key=${dayParam} OR n.first_attempt_at>=${dayStartParam} OR (n.first_attempt_at IS NOT NULL AND n.next_attempt_at>=${dayStartParam}))`;
+}
 export async function sendSelfDigest(ctx, storeId) {
   if (!readSelfConfig(ctx.env).processingEnabled) return;
+  // Morning-only promise covers retries of an earlier day's digest too.
+  if (jstHour(ctx.now()) < 9) return;
   const store = await getStore(ctx, storeId);
   if (store?.state !== "active" || !store.lineUserId) return;
   let notification = await ctx.db
@@ -18,13 +28,12 @@ export async function sendSelfDigest(ctx, storeId) {
     .first();
   if (!notification) {
     const day = dateKeys(ctx.now()).day;
-    if (new Date(ctx.now() + 9 * 3600000).getUTCHours() < 9) return;
     if (
       await ctx.db
         .prepare(
-          "SELECT id FROM notification_jobs WHERE store_id=? AND day_key=?",
+          "SELECT id FROM notification_jobs n WHERE n.store_id=?1 AND " + usedDaySql("?2", "?3"),
         )
-        .bind(storeId, day)
+        .bind(storeId, day, jstDayStart(ctx.now()))
         .first()
     )
       return;
@@ -139,7 +148,17 @@ export async function sendSelfDigest(ctx, storeId) {
       id: reservationId,
       storeId,
     });
-    if (!reservation.ok) return;
+    if (!reservation.ok) {
+      // Quota exhausted/unknown: hold this digest for an hour instead of
+      // re-reading the LINE quota in every notify slot.
+      await ctx.db
+        .prepare(
+          "UPDATE notification_jobs SET next_attempt_at=? WHERE id=? AND lease_id=?",
+        )
+        .bind(ctx.now() + 3600000, notification.id, lease)
+        .run();
+      return;
+    }
     const current = await getStore(ctx, storeId);
     ensure(
       current?.state === "active" &&
@@ -168,9 +187,10 @@ export async function sendSelfDigest(ctx, storeId) {
     await ctx.db.batch([
       ctx.db
         .prepare(
-          "UPDATE notification_jobs SET state='accepted',accepted_request_id=?,lease_id=NULL,lease_until=NULL WHERE id=? AND lease_id=?",
+          // next_attempt_at := acceptance time (see usedDaySql).
+          "UPDATE notification_jobs SET state='accepted',accepted_request_id=?,next_attempt_at=?,lease_id=NULL,lease_until=NULL WHERE id=? AND lease_id=?",
         )
-        .bind(result.requestId ?? null, notification.id, lease),
+        .bind(result.requestId ?? null, ctx.now(), notification.id, lease),
       ctx.db
         .prepare(
           "UPDATE review_jobs SET stage='notified',updated_at=? WHERE id IN (SELECT r.job_id FROM replies r JOIN notification_items n ON n.reply_id=r.id WHERE n.notification_id=?) AND stage='draft_ready'",

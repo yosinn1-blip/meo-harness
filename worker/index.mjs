@@ -29,7 +29,7 @@
 
 import { createSelfContext } from './self-service/config.mjs';
 import { handleSelfRequest } from './self-service/router.mjs';
-import { runSelfScheduled } from './self-service/scheduled.mjs';
+import { runSelfScheduled, legacyCronDue } from './self-service/scheduled.mjs';
 
 import { generateReply, PROVIDERS } from '../src/reply-engine.mjs';
 import { verifyLineCredentials } from '../src/line-notify.mjs';
@@ -129,9 +129,16 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    try { await runSelfScheduled(createSelfContext(env)); }
+    // The cron fires every 5 minutes; the self-service picks one job from the
+    // scheduled minute. Legacy KV/GBP/Gmail work stays hourly (the :00 run),
+    // so KV list calls do not grow. A call without scheduledTime (tests, manual
+    // invocation) keeps the old run-everything behaviour.
+    const hasSlot = Number.isFinite(controller?.scheduledTime);
+    const scheduledTime = hasSlot ? controller.scheduledTime : Date.now();
+    try { await runSelfScheduled(createSelfContext(env), { scheduledTime }); }
     catch { console.error("[cron/self] SELF_PROCESSING_FAILED"); }
-    const utcHour = new Date().getUTCHours();
+    if (hasSlot && !legacyCronDue(scheduledTime)) return;
+    const utcHour = new Date(scheduledTime).getUTCHours();
 
     // ① daily-digest バッファを吐き出す
     const pendingList = await env.STORES.list({ prefix: 'pending:' });

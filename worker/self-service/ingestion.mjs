@@ -38,6 +38,7 @@ export async function pollSelfStore(ctx, storeId) {
         accountId: store.accountId,
         locationId: store.locationId,
         pageToken,
+        pageSize: LIMITS.googlePageSize,
         fetchImpl: ctx.fetchImpl,
       });
     } catch (e) {
@@ -50,6 +51,14 @@ export async function pollSelfStore(ctx, storeId) {
       }
       throw e;
     }
+    // Pages are newest-updated first and createTime<=updateTime, so once a
+    // page ends before the cutoff no later page can hold a wanted review.
+    const last = result.items.at(-1);
+    const lastTime = Date.parse(last?.updateTime ?? last?.createTime);
+    const nextPageToken =
+      result.nextPageToken && !(Number.isFinite(lastTime) && lastTime < cutoff)
+        ? result.nextPageToken
+        : null;
     const statements = [storeGuard(ctx, store, ["active"])];
     for (const raw of result.items) {
       if (
@@ -89,9 +98,9 @@ export async function pollSelfStore(ctx, storeId) {
         )
         .bind(
           storeId,
-          result.nextPageToken,
+          nextPageToken,
           ctx.now(),
-          result.nextPageToken ? null : ctx.now(),
+          nextPageToken ? null : ctx.now(),
           cutoff,
         ),
       ctx.db
@@ -102,13 +111,14 @@ export async function pollSelfStore(ctx, storeId) {
       ctx.db.prepare("DELETE FROM mutation_guards"),
     );
     await ctx.db.batch(statements);
-    pageToken = result.nextPageToken;
+    pageToken = nextPageToken;
     if (!pageToken) break;
   }
 }
+// Returns how many candidates were tried (0 = nothing to draft).
 export async function processSelfJobs(ctx, { limit = 5 } = {}) {
   const c = readSelfConfig(ctx.env);
-  if (!c.processingEnabled || c.limits.drafts === 0) return;
+  if (!c.processingEnabled || c.limits.drafts === 0) return 0;
   // A known successful generation whose write was interrupted is held, never bought again automatically.
   await ctx.db
     .prepare(
@@ -131,7 +141,9 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
     .run();
   const candidates = await ctx.db
     .prepare(
-      "SELECT j.* FROM review_jobs j JOIN stores s ON s.id=j.store_id WHERE j.stage='fetched' AND j.generation=s.generation AND s.state='active' AND j.next_attempt_at<=? AND j.payload_ciphertext IS NOT NULL ORDER BY j.next_attempt_at,j.created_at,j.id LIMIT ?",
+      // Fair across stores: the store with the fewest drafts still waiting for
+      // LINE goes first, so a later store is not queued behind another's backlog.
+      "WITH waiting AS (SELECT r.store_id,count(*) c FROM replies r WHERE r.state='pending' AND r.expires_at>?1 AND NOT EXISTS (SELECT 1 FROM notification_items n WHERE n.reply_id=r.id) GROUP BY r.store_id) SELECT j.* FROM review_jobs j JOIN stores s ON s.id=j.store_id LEFT JOIN waiting w ON w.store_id=j.store_id WHERE j.stage='fetched' AND j.generation=s.generation AND s.state='active' AND j.next_attempt_at<=?1 AND j.payload_ciphertext IS NOT NULL ORDER BY COALESCE(w.c,0),j.next_attempt_at,j.created_at,j.id LIMIT ?2",
     )
     .bind(ctx.now(), Math.min(limit, LIMITS.batchReviews))
     .all();
@@ -153,11 +165,13 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
       .bind(scope, period)
       .first();
     if (budget.used >= budget.cap) {
-      // Monthly exhaustion must not occupy every later cron's oldest slot.
+      // Monthly exhaustion must not occupy later draft slots: an exhausted
+      // store (fewest waiting, so first in line) yields all its jobs at once.
+      // The draft budget scope is per location, i.e. per store.
       const [year, month] = period.split('-').map(Number);
       const nextMonth = Date.UTC(year, month, 1) - 9 * 3600000;
-      await ctx.db.prepare("UPDATE review_jobs SET next_attempt_at=? WHERE id=? AND stage='fetched'")
-        .bind(nextMonth, candidate.id).run();
+      await ctx.db.prepare("UPDATE review_jobs SET next_attempt_at=? WHERE store_id=? AND generation=? AND stage='fetched' AND next_attempt_at<?")
+        .bind(nextMonth, candidate.store_id, candidate.generation, nextMonth).run();
       continue;
     }
     const job = await claimJob(ctx, { id: candidate.id, stage: "fetched" });
@@ -271,4 +285,5 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
         .run();
     }
   }
+  return candidates.results.length;
 }

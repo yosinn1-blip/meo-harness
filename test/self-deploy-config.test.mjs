@@ -50,3 +50,11 @@ test("npm run deploy keeps dashboard-only vars", () => {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.match(pkg.scripts.deploy, /--keep-vars/);
 });
+
+test("one cron trigger runs every five minutes; legacy work stays hourly in code", () => {
+  const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
+  const section = toml.split(/^\[triggers\]\s*$/m)[1]?.split(/^\[/m)[0];
+  assert.ok(section, "[triggers] section exists");
+  const crons = JSON.parse(section.match(/^\s*crons\s*=\s*(\[.*\])\s*$/m)[1]);
+  assert.deepEqual(crons, ["*/5 * * * *"]);
+});

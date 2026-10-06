@@ -48,9 +48,23 @@
 
 ## Free実行上限の追加確認
 
-1店舗・口コミ1件・下書き1件・LINE1通・期限切れ店舗0・結果不明返信0を、実装/既存schemaとメモリ内SQLiteで計数した参考値は、D1 binding呼出38回、SQL文70本、架空provider呼出6回。実Cloudflareでの上限検証ではない。最大5店舗・5下書き、cleanupで店舗を削除する場合、既存KV処理分はこの値に含まれない。
+（2026-10-06 更新）cron は `*/5 * * * *` の1個（1日288回）。1回の実行は、予定時刻（`controller.scheduledTime`）のUTCの分で決まる仕事を1つだけ行う。
 
-[D1制限表](https://developers.cloudflare.com/d1/platform/limits/)のFree 50 queriesと、[Workers内部サービスの制限](https://developers.cloudflare.com/workers/platform/limits/#subrequests)の数え方を区別する。[batch](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)は複数SQLを1callにまとめるため、70 SQL文だけを根拠に上限超過と断定しない。公開前に本番相当の1 invocation全体を計測し、上限内の処理件数を決める。課金変更で解消済みと扱わない。
+| 分 | 役割 | 中身 | 空振りしたとき |
+|---|---|---|---|
+| :00 | 片付け | `purgeExpired` と旧サービスの KV 処理・GBP ポーリング・Gmail 監視（旧処理は今までどおり1時間に1回） | なし |
+| :05 :35 | 取得 | 最短2時間あけた店を1店、1ページ（20件）。最後の口コミが取得範囲より古ければ以降のページは読まない | 下書き |
+| :10 :20 :30 :40 :50 | 下書き | 1件。届け待ちの下書きが少ない店から順に | 通知 |
+| :15 :45 :55 | 通知 | 1店に1通。期限の来た再送が先、次に最も待っている店。JST9時より前は再送も送らない | 下書き |
+| :25 | 照合 | 投稿状態の整理と結果不明の返信1件の照合 | 下書き |
+
+空振りしたときの代わりは1回だけで、連鎖しない。処理OFFのときは :00 の片付けだけが動く。店を削除した回は一般清掃を次の :00 へ回す。LINE の枠切れ・枠不明の通知は1時間後に再確認する。
+
+D1 の数え方は、binding 呼び出し（batch は1回）と SQL 文（batch 内の文も1本ずつ）の両方。試験（miniflare の D1）で1回あたり「呼び出し40回以下・文50本以下」を全役割で固定している（`test/self-runtime/scheduler-bounds.test.mjs`、`test/self-runtime/schedule-slots.test.mjs`、`test/self-runtime/schedule-throughput.test.mjs`）。実測の最大は、下書きが空振りして5件の通知へ回る回の 20回/33本。見積もりの最悪は 22回/35本（空振りの4回/4本＋通知の最悪18回/31本）。旧方式の実測は偶数時 29回/91本、奇数時 31〜32回/84〜86本だった。実Cloudflareでの上限検証ではない。既存KV処理分はこの値に含まれない。
+
+[D1制限表](https://developers.cloudflare.com/d1/platform/limits/)のFree 50 queriesと、[Workers内部サービスの制限](https://developers.cloudflare.com/workers/platform/limits/#subrequests)の数え方を区別する。[batch](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)は複数SQLを1callにまとめるが、batch内の文も数えられる前提でも上限内に収まるようにした。公開後に本番の1 invocation の cpuTime と D1 の rows_read を一度確認する。課金変更で解消済みと扱わない。
+
+戻すときはコードと `wrangler.toml` の cron を必ず一緒に戻す。古いコードのまま `*/5` が残ると、旧処理が1時間に12回走る（KV list 576回/日）。
 
 ## 証跡
 

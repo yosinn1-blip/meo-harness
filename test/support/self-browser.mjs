@@ -286,14 +286,24 @@ export async function startTestApp() {
             offset += data.ms;
             response = Response.json({ ok: true });
           } else if (url.pathname === "/fixture/cron") {
-            // Test clock only: exercise the actual production phase, not a
-            // replacement scheduler. Poll at JST 09-21; notify one hour later.
+            // Test clock only: exercise the actual production 5-minute slots,
+            // not a replacement scheduler. Poll in a :05 slot (JST 09-21, and
+            // after the 2h poll interval), draft at :10; notify in the next
+            // hour's :15 slot, more than one hour after the fetch.
+            const slotMs=300000;
             if(data.phase==='poll'){
-              let next=Math.ceil(now()/3600000)*3600000;
-              while(Math.floor(next/3600000)%2!==0 || new Date(next).getUTCHours()>12)next+=3600000;
+              const last=(await db.prepare("SELECT MAX(last_polled_at) t FROM stores").first())?.t ?? 0;
+              let next=Math.ceil(now()/slotMs)*slotMs;
+              while(new Date(next).getUTCMinutes()!==5 || new Date(next).getUTCHours()>12 || next<last+7200000)next+=slotMs;
               offset+=next-now();
-            } else if(data.phase==='notify') offset+=3600000;
-            await module.runSelfScheduled(ctx);
+              await module.runSelfScheduled(ctx,{scheduledTime:next});
+              offset+=slotMs;
+              await module.runSelfScheduled(ctx,{scheduledTime:next+slotMs});
+            } else if(data.phase==='notify'){
+              const next=Math.floor(now()/3600000)*3600000+3600000+15*60000;
+              offset+=next-now();
+              await module.runSelfScheduled(ctx,{scheduledTime:next});
+            } else await module.runSelfScheduled(ctx);
             response = Response.json({ ok: true });
           } else response = new Response(null, { status: 404 });
         } else {

@@ -20,6 +20,9 @@ export async function purgeExpired(ctx) {
       row.metadata_fetched_at === null || row.metadata_fetched_at <= n - 21 * 86400000
         ? {expiredMetadata:{storeId:row.id,generation:row.generation,fetchedAt:row.metadata_fetched_at,before:n-21*86400000}}
         : {abandoned: { storeId: row.id, before: n - 86400000 }});
+  // Keep one :00 slot within the per-invocation D1 bound: a store deletion
+  // defers the general cleanup batch to the next hourly cleanup.
+  if (expired.results.length) return;
   await ctx.db.batch([
     ctx.db
       .prepare(
