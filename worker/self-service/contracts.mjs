@@ -16,9 +16,10 @@ export const LIMITS = Object.freeze({
   // 4h for a batch of five while more reviews are still being drafted.
   notifyMinAgeMs: 3600000,
   notifyBatchWaitMs: 14400000,
-  // LINE is called only from JST 09:00 to 20:59 (new digests and retries). A
-  // push takes seconds, so one started before 21:00 is accepted the same JST
-  // day; the daily limit then never sees an acceptance after midnight.
+  // A digest attempt (new or retry) starts only from JST 09:00 to 20:59; the
+  // check is at the start, so one begun at 20:59:59 may reach LINE a few
+  // seconds after 21:00 (bounded by the request timeouts). That is far from
+  // midnight, so the daily limit never sees an acceptance on the next JST day.
   notifyEndHourJst: 21,
   // The review text is kept for 7 days from the fetch (purgeExpired); a draft
   // whose review is older can no longer be delivered.

@@ -11,8 +11,9 @@ import { ensure } from "./errors.mjs";
 // code last called LINE's push for the digest: written just before the push
 // and, on acceptance, set to the acceptance time in the same transaction as
 // the push reservation commit (so the acceptance day is held even if the row's
-// own save then fails). LINE is only called from JST 09:00 to 20:59, so a push
-// is never accepted on the JST day after its attempt. A claim that does not
+// own save then fails). Attempts only start from JST 09:00 to 20:59 (an attempt
+// begun at 20:59:59 may finish seconds after 21:00), so a push is never
+// accepted on the JST day after its attempt. A claim that does not
 // call LINE (quota hold, inactive store, or the local close of an already
 // committed reservation) never writes it.
 // next_attempt_at is only the retry due time and lease_until only the lease.
@@ -25,8 +26,9 @@ export function usedDaySql(dayParam, dayStartParam) {
 }
 export async function sendSelfDigest(ctx, storeId) {
   if (!readSelfConfig(ctx.env).processingEnabled) return;
-  // JST 09:00-20:59 only, retries of an earlier day's digest included: the
-  // morning promise, and no push accepted after JST midnight (see usedDaySql).
+  // Start only from JST 09:00 to 20:59, retries of an earlier day's digest
+  // included: the morning promise, and no push accepted after JST midnight
+  // (see usedDaySql). The check is at the start of the attempt.
   if (jstHour(ctx.now()) < 9 || jstHour(ctx.now()) >= LIMITS.notifyEndHourJst) return;
   const store = await getStore(ctx, storeId);
   if (store?.state !== "active" || !store.lineUserId) return;

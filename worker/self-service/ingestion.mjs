@@ -150,9 +150,11 @@ export async function processSelfJobs(ctx, { limit = 5 } = {}) {
     .prepare(
       // Fair across stores: the store with the fewest drafts still waiting for
       // LINE goes first, so a later store is not queued behind another's backlog.
-      "WITH waiting AS (SELECT r.store_id,count(*) c FROM replies r WHERE r.state='pending' AND r.expires_at>?1 AND NOT EXISTS (SELECT 1 FROM notification_items n WHERE n.reply_id=r.id) GROUP BY r.store_id) SELECT j.* FROM review_jobs j JOIN stores s ON s.id=j.store_id LEFT JOIN waiting w ON w.store_id=j.store_id WHERE j.stage='fetched' AND j.generation=s.generation AND s.state='active' AND j.next_attempt_at<=?1 AND j.payload_ciphertext IS NOT NULL ORDER BY COALESCE(w.c,0),j.next_attempt_at,j.created_at,j.id LIMIT ?2",
+      "WITH waiting AS (SELECT r.store_id,count(*) c FROM replies r WHERE r.state='pending' AND r.expires_at>?1 AND NOT EXISTS (SELECT 1 FROM notification_items n WHERE n.reply_id=r.id) GROUP BY r.store_id) SELECT j.* FROM review_jobs j JOIN stores s ON s.id=j.store_id LEFT JOIN waiting w ON w.store_id=j.store_id WHERE j.stage='fetched' AND j.generation=s.generation AND s.state='active' AND j.next_attempt_at<=?1 AND j.payload_ciphertext IS NOT NULL AND j.created_at>?3 ORDER BY COALESCE(w.c,0),j.next_attempt_at,j.created_at,j.id LIMIT ?2",
     )
-    .bind(ctx.now(), Math.min(limit, LIMITS.batchReviews))
+    // A review past its 7-day keep can never be delivered: do not spend Groq or
+    // the monthly draft budget on it, even if a delayed purge has not erased it.
+    .bind(ctx.now(), Math.min(limit, LIMITS.batchReviews), ctx.now() - LIMITS.reviewKeepMs)
     .all();
   for (const candidate of candidates.results) {
     const store = await getStore(ctx, candidate.store_id);
