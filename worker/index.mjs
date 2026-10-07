@@ -892,7 +892,11 @@ async function handleGbpOAuthCallback(url, env) {
   const state = url.searchParams.get('state');
   const error = url.searchParams.get('error');
 
-  if (error) return htmlPage('GBP 認証エラー', `<p>Google 認証が拒否されました: <code>${error}</code></p>`, 400);
+  // error はリンクを作った人が自由に書ける。決まった形の値だけを表示し、それ以外は伏せる。
+  if (error) {
+    const shown = /^[a-z_]{1,64}$/.test(error) ? error : 'unknown_error';
+    return htmlPage('GBP 認証エラー', `<p>Google 認証が拒否されました: <code>${escapeHtml(shown)}</code></p>`, 400);
+  }
   if (!code || !state) return htmlPage('GBP 認証エラー', '<p>code または state が不正です</p>', 400);
 
   const storeId = await env.STORES.get(`gbp-oauth-state:${state}`);
@@ -919,13 +923,14 @@ async function handleGbpOAuthCallback(url, env) {
 
   const tokenData = await tokenRes.json();
   if (!tokenRes.ok || !tokenData.refresh_token) {
-    const msg = tokenData.error_description ?? tokenData.error ?? JSON.stringify(tokenData).slice(0, 200);
-    return htmlPage('トークン取得エラー', `<p>${msg}</p><p>refresh_token が返されませんでした。Google Cloud Console で「offline アクセス」が有効か確認してください。</p>`, 500);
+    // 応答の JSON をそのまま出すと access_token などが画面に残るので、エラーの文言と HTTP 状態だけを出す
+    const msg = tokenData.error_description ?? tokenData.error ?? `HTTP ${tokenRes.status}`;
+    return htmlPage('トークン取得エラー', `<p>${escapeHtml(msg)}</p><p>refresh_token が返されませんでした。Google Cloud Console で「offline アクセス」が有効か確認してください。</p>`, 500);
   }
 
   // refresh_token を store に保存
   const storeRaw = await env.STORES.get(`store:${storeId}`);
-  if (!storeRaw) return htmlPage('エラー', `<p>store:${storeId} が見つかりません</p>`, 404);
+  if (!storeRaw) return htmlPage('エラー', `<p>store:${escapeHtml(storeId)} が見つかりません</p>`, 404);
   const store = JSON.parse(storeRaw);
   store.gbpRefreshToken = tokenData.refresh_token;
 
@@ -947,11 +952,11 @@ async function handleGbpOAuthCallback(url, env) {
 
   const next = picked
     ? `<p>店舗「${escapeHtml(picked.title ?? picked.gbpLocationId)}」を自動で選びました。新しい口コミは1時間ごとに確認します。</p>`
-    : `<p>次のステップ: <code>GET /admin/stores/${storeId}/gbp/locations</code> で店舗を確認し、<code>PUT /admin/stores/${storeId}/gbp/location</code> で選択してください。</p>`;
+    : `<p>次のステップ: <code>GET /admin/stores/${escapeHtml(storeId)}/gbp/locations</code> で店舗を確認し、<code>PUT /admin/stores/${escapeHtml(storeId)}/gbp/location</code> で選択してください。</p>`;
   return htmlPage(
     'GBP 認証完了',
     `<p>✅ Google ビジネスプロフィールの認証が完了しました。</p>
-     <p>店舗 ID: <code>${storeId}</code></p>
+     <p>店舗 ID: <code>${escapeHtml(storeId)}</code></p>
      ${next}`,
     200,
   );
@@ -1102,12 +1107,23 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// 店主のログイン Cookie と同じドメインで返す HTML。bodyHtml に入れる可変の値は
+// 呼び出し側で escapeHtml() を通すこと。万一漏れてもスクリプトは CSP で動かない。
+const HTML_PAGE_HEADERS = Object.freeze({
+  'Content-Type': 'text/html; charset=utf-8',
+  'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+  'X-Content-Type-Options': 'nosniff',
+  'Cache-Control': 'no-store',
+  'Referrer-Policy': 'no-referrer',
+});
+
 function htmlPage(title, bodyHtml, status = 200) {
+  const safeTitle = escapeHtml(title);
   return new Response(
-    `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>${title}</title>
+    `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>${safeTitle}</title>
      <style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;line-height:1.6}</style>
-     </head><body><h1>${title}</h1>${bodyHtml}</body></html>`,
-    { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+     </head><body><h1>${safeTitle}</h1>${bodyHtml}</body></html>`,
+    { status, headers: HTML_PAGE_HEADERS },
   );
 }
 
