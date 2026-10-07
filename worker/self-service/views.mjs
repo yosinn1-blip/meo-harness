@@ -4,6 +4,10 @@ import qrcode from "qrcode-generator";
 import start from "./ui/start.html";
 import home from "./ui/home.html";
 import homeCss from "./ui/home.css";
+import heroPhone from "./ui/images/hero-phone.webp";
+import flowReview from "./ui/images/flow-review.webp";
+import flowDraft from "./ui/images/flow-draft.webp";
+import flowSend from "./ui/images/flow-send.webp";
 import account from "./ui/account.html";
 import privacy from "./ui/privacy.html";
 import terms from "./ui/terms.html";
@@ -13,6 +17,13 @@ import faq from "./ui/faq.html";
 import report from "./ui/report.html";
 import quickstartPage from "./ui/quickstart.html";
 import reportScript from "./ui/report.js.txt";
+const homeImages = Object.freeze({
+  "/self/assets/hero-phone.webp": heroPhone,
+  "/self/assets/flow-review.webp": flowReview,
+  "/self/assets/flow-draft.webp": flowDraft,
+  "/self/assets/flow-send.webp": flowSend,
+});
+
 export function serveSelfPage(request, ctx = { env: {} }) {
   const path = new URL(request.url).pathname;
   let body, type;
@@ -36,6 +47,9 @@ export function serveSelfPage(request, ctx = { env: {} }) {
   } else if (path === "/self/assets/home.css") {
     body = homeCss;
     type = "text/css; charset=utf-8";
+  } else if (Object.hasOwn(homeImages, path)) {
+    body = homeImages[path];
+    type = "image/webp";
   } else if (supportPage) {
     body = supportPages[path];
     type = 'text/html; charset=utf-8';

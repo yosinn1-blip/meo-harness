@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildWorker } from "../scripts/build-self-test.mjs";
-import { buildReviewBubble, SEND_DISPLAY_TEXT } from "../src/line-flex.mjs";
 const compiled = await buildWorker();
 const worker = (await import(compiled)).default;
 const verificationFile = 'google0123456789abcdef.html';
@@ -159,7 +158,7 @@ test('top page explains the service without auth or DB and leads to registration
   assert.equal(response.headers.get('Set-Cookie'), null);
   assert.match(response.headers.get('Content-Security-Policy'), /script-src 'none'/);
   const html = await response.text();
-  for (const text of ['「送信」', '編集する', '先着10店舗', '月30件', '運営者', 'meo.harness@gmail.com', 'href="/start"', 'href="/self/privacy"', 'href="/self/terms"'])
+  for (const text of ['「送信」', '編集する', '先着10店舗', '月30件', 'Yoshiki Apps', 'meo.harness@gmail.com', 'href="/start"', 'href="/self/privacy"', 'href="/self/terms"'])
     assert.ok(html.includes(text), text);
   assert.doesNotMatch(html, /スキップ|承認して送信|<script/);
   const css = await worker.fetch(new Request('https://meo.test/self/assets/home.css'), {}, {});
@@ -186,11 +185,12 @@ test('home exposes pricing, support and existing-account entry without setup-tim
     assert.ok(html.includes(fragment), fragment);
   const hero = html.match(/<section[^>]*class="hero"[\s\S]*?<\/section>/)?.[0];
   assert.ok(hero, 'hero section exists');
-  assert.match(hero, /href="\/account"/);
+  const header = html.match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0] ?? '';
+  assert.match(header, /href="\/account"/);
   assert.doesNotMatch(html, /5分で完了|5分で始められ|待ち時間もありません/);
 });
 
-test('home FAQ uses native disclosures for accounts, manual sending and daily notification timing', async () => {
+test('home FAQ uses native disclosures for manual sending and daily notification timing', async () => {
   const response = await worker.fetch(new Request('https://meo.test/'), {}, {});
   const html = await response.text();
   const faq = html.match(/<section[^>]*id="faq"[^>]*>[\s\S]*?<\/section>/)?.[0];
@@ -198,7 +198,7 @@ test('home FAQ uses native disclosures for accounts, manual sending and daily no
   const disclosures = [...faq.matchAll(/<details(?:\s[^>]*)?>[\s\S]*?<\/details>/g)].map(match => match[0]);
   assert.equal(disclosures.length, 5);
   for (const disclosure of disclosures) assert.match(disclosure, /<summary(?:\s[^>]*)?>[\s\S]+?<\/summary>/);
-  assert.match(faq, /Google(?:アカウント|ビジネスプロフィール)/);
+  assert.match(html, /Google(?:アカウント|ビジネスプロフィール)/);
   assert.match(faq, /LINE/);
   assert.match(faq, /送信/);
   assert.match(faq, /1日1回/);
@@ -231,30 +231,22 @@ test('home steps quote the printed button names of the production one-button LIN
   for (const name of ['初めての方：Googleでお店を接続', 'この店舗を使う', 'LINEを開いてコードを送る', '確認して登録画面へ進む', '通知先を確認して次へ', '利用を開始する'])
     assert.ok(steps.includes(`「${name}」`), name);
   assert.doesNotMatch(steps, /「Googleで接続」|6桁|LINEで本人確認/);
-  assert.ok(steps.includes('返信案は登録直後には届きません。'));
+  assert.ok(homeSection(html, 'pricing').includes('返信案は登録直後には届きません。'));
   assert.equal(html.split('登録直後には届きません').length - 1, 1, 'stated once');
   assert.match(steps, /スマホ1台/);
   assert.doesNotMatch(html, /次の朝9時|昼以降|\d+分ほど|\d+分で/);
 });
 
-test('home preview card mirrors the real LINE review card wording', async () => {
+test('home illustrative image is labeled as an example, not a live LINE control', async () => {
   const html = await homeHtml();
   const figure = html.match(/<figure\b[^>]*>[\s\S]*?<\/figure>/)?.[0] ?? '';
-  const bubble = buildReviewBubble({ replyId: 'r1', review: { star: 5, name: '山田様', text: '例', draft: '例' }, bizName: 'Yoshiki Cafe', editable: true });
-  const head = bubble.header.contents[0].text;
-  const texts = bubble.body.contents.flatMap(box => box.contents ?? []).map(item => item.text);
-  const notice = texts.find(text => /7日/.test(text ?? ''));
-  assert.ok(notice, 'real card has the 7-day notice');
-  assert.ok(figure.includes(`<div class="card-head">${head}</div>`), head);
-  assert.ok(figure.includes(`<p class="fine">${notice}</p>`), notice);
-  assert.ok(figure.includes('<p class="label">返信案</p>'));
-  assert.match(figure, /<p class="review">「[^<]+」<\/p>/);
-  assert.doesNotMatch(figure, /AIの返信案|Googleへの投稿を確認しました/);
-  // LINE shows the postback displayText as the owner's bubble, so the preview mirrors it.
-  assert.ok(figure.includes(`<p class="bubble-me">${SEND_DISPLAY_TEXT}</p>`), SEND_DISPLAY_TEXT);
-  assert.ok(figure.includes('返信がGoogleに投稿されたことを確認しました。'));
-  const actions = figure.match(/<div class="card-actions">([\s\S]*?)<\/div>/)?.[1] ?? '';
-  assert.match(actions, /chip-send">送信<\/span>[\s\S]*chip-edit">編集する<\/span>/);
+  assert.match(figure, /<img\b[^>]*src="\/self\/assets\/hero-phone\.webp"/);
+  assert.match(figure, /alt="[^"]*(?:口コミ|返信案)[^"]*"/);
+  assert.match(figure, /画面はイメージです/);
+  assert.match(figure, /架空/);
+  assert.doesNotMatch(figure, /<button\b|<form\b|class="(?:card-actions|chip-send|chip-edit)"/);
+  assert.match(html, /「送信」を押した返信だけがGoogleに公開/);
+  assert.match(html, /「編集する」/);
 });
 
 test('home explains editing, AI data handling, limits, eligibility and the unofficial status', async () => {
@@ -268,8 +260,8 @@ test('home explains editing, AI data handling, limits, eligibility and the unoff
   assert.ok(html.includes('個人店向け'));
   assert.ok(homeSection(html, 'steps').includes('オーナーや本部が管理しているお店は'));
   const faq = homeSection(html, 'faq');
-  assert.ok(faq.includes('コードを送ったLINEに届きます'));
-  assert.ok(faq.includes('試験運用'));
+  assert.ok(html.includes('コードを送ったLINEに届きます'));
+  assert.ok(homeSection(html, 'pricing').includes('試験運用'));
   const summaries = [...faq.matchAll(/<summary>([\s\S]*?)<\/summary>/g)].map(match => match[1]);
   assert.equal(summaries.length, 5);
   assert.equal(new Set(summaries).size, summaries.length, 'FAQ questions are distinct');
@@ -286,7 +278,7 @@ test('draft scope and the five-per-notification batch are never described as a f
   const quickstart = await (await worker.fetch(new Request('https://meo.test/self/help/quickstart'), {}, {})).text();
   const pages = {
     registration: read('worker/self-service/ui/app.js.txt'),
-    homePricing: homeSection(await homeHtml(), 'pricing'),
+    homePricingDetails: homeSection(await homeHtml(), 'pricing'),
     quickstart,
     quickstartDoc: read('docs/quickstart.md'),
   };

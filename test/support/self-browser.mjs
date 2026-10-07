@@ -20,11 +20,14 @@ export async function startTestApp() {
       bundle: true,
       format: "esm",
       platform: "neutral",
+      // Match the Node/runtime fixture target; esnext binary uses Uint8Array.fromBase64 (Node 22 lacks it).
+      target: "es2022",
       loader: {
         ".html": "text",
         ".css": "text",
         ".txt": "text",
         ".md": "text",
+        ".webp": "binary",
       },
     });
     module = await import(pathToFileURL(outfile));

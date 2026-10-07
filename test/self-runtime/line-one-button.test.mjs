@@ -17,7 +17,7 @@ import {dateKeys} from '../../worker/self-service/contracts.mjs';
 let compiledRouterPromise;
 function compiledRouter(){
  return compiledRouterPromise??=build({entryPoints:['worker/self-service/router.mjs'],bundle:true,format:'esm',platform:'neutral',target:'es2022',write:false,
-  loader:{'.html':'text','.css':'text','.txt':'text','.md':'text'}})
+  loader:{'.html':'text','.css':'text','.txt':'text','.md':'text','.webp':'binary'}})
   .then(result=>import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text).toString('base64')))
   .then(module=>module.handleSelfRequest);
 }

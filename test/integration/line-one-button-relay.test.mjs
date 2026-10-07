@@ -19,7 +19,7 @@ async function setup(t){
  // Each fixture has its own files. Never overwrite a shared worker.mjs or edit relay sources.
  const relayScript=join(temp,'relay.mjs'),meoScript=join(temp,'meo.mjs');
  await build({entryPoints:[join(relay,'src/index.js')],outfile:relayScript,bundle:true,format:'esm',platform:'neutral',target:'es2022'});
- await build({entryPoints:[join(meo,'worker/index.mjs')],outfile:meoScript,bundle:true,format:'esm',platform:'neutral',target:'es2022',loader:{'.html':'text','.css':'text','.txt':'text','.md':'text'}});
+ await build({entryPoints:[join(meo,'worker/index.mjs')],outfile:meoScript,bundle:true,format:'esm',platform:'neutral',target:'es2022',loader:{'.html':'text','.css':'text','.txt':'text','.md':'text','.webp':'binary'}});
  const {SELF_DB,...bindings}=fixtureEnv(null,{SELF_LINE_BUTTON_CONFIRM_ENABLED:'true',SELF_LINE_AUTO_BUTTON_ENABLED:'true',SELF_LINE_ONE_BUTTON_ENABLED:'true',SELF_LINE_AUTO_PIN_ENABLED:'false',LINE_CHANNEL_SECRET:secret});
  const pushes=[],io=[],unexpected=[],errors=[];
  const log=new Log(LogLevel.ERROR);log.logWithLevel=(level,message)=>{if(level<=LogLevel.ERROR)errors.push(String(message));};

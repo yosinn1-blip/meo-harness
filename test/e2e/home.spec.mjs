@@ -60,6 +60,18 @@ async function contrastRatio(locator) {
 async function expectNoOverflow(page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 }
+async function expectHomeImages(page) {
+  await expect(page.locator('main img')).toHaveCount(4);
+  for (const name of ['hero-phone', 'flow-review', 'flow-draft', 'flow-send']) {
+    const picture = page.locator(`img[src="/self/assets/${name}.webp"]`);
+    await expect(picture).toHaveCount(1);
+    await expect(picture).toHaveAttribute('alt', /\S+/);
+    await test.step('scroll image ' + name, () => picture.scrollIntoViewIfNeeded(), { timeout: 10000 });
+    await test.step('visible image ' + name, () => expect(picture).toBeVisible(), { timeout: 10000 });
+    await test.step('loaded image ' + name, () => expect.poll(() => picture.evaluate(element => element.complete && element.naturalWidth > 0 && element.naturalHeight > 0)).toBe(true), { timeout: 10000 });
+  }
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+}
 async function expectFocusIndicator(locator) {
   await expect(locator).toBeFocused();
   expect(await locator.evaluate(element => element.matches(':focus-visible'))).toBe(true);
@@ -80,31 +92,32 @@ for (const width of [320, 375, 768, 1280]) {
     if (process.env.HOME_BASELINE === '1')
       await page.screenshot({ path: `output/self-service/home-before-${width}.png`, fullPage: true });
     await expectNoOverflow(page);
-    // The sample LINE card shows 送信 (left) and 編集する (right) side by side, like the real card.
-    const send = await page.locator('.chip-send').boundingBox();
-    const edit = await page.locator('.chip-edit').boundingBox();
-    expect(Math.abs(send.y - edit.y)).toBeLessThan(1);
-    expect(send.x).toBeLessThan(edit.x);
-    expect(send.height).toBeGreaterThanOrEqual(40);
-    expect(edit.height).toBeGreaterThanOrEqual(40);
-    // .card clips overflow, so check each label fits inside its own chip.
-    for (const chip of await page.locator('.chip').all())
-      expect(await chip.evaluate(element => element.scrollWidth <= element.clientWidth), await chip.innerText()).toBe(true);
+    await expectHomeImages(page);
     const header = await page.locator('header').boundingBox();
-    const topCta = await page.locator('.top-cta').boundingBox();
-    expect(topCta.height).toBeGreaterThanOrEqual(44);
-    expect(topCta.y).toBeGreaterThanOrEqual(header.y);
-    expect(topCta.y + topCta.height).toBeLessThanOrEqual(header.y + header.height);
-    for (const link of await page.locator('.foot nav a').all())
+    await expect(page.locator('header a[href="/account"]')).toBeVisible();
+    if (width <= 650) {
+      const sectionLinks = page.locator('.header-nav .nav-section');
+      await expect(sectionLinks).toHaveCount(2);
+      for (const link of await sectionLinks.all()) await expect(link).toBeHidden();
+    }
+    // The approved compact mobile header keeps the account entry, not a second CTA.
+    const headerCta = page.locator('header a[href="/start"]');
+    if (await headerCta.isVisible()) {
+      const topCta = await headerCta.boundingBox();
+      expect(topCta.height).toBeGreaterThanOrEqual(44);
+      expect(topCta.y).toBeGreaterThanOrEqual(header.y);
+      expect(topCta.y + topCta.height).toBeLessThanOrEqual(header.y + header.height);
+    }
+    for (const link of await page.locator('footer nav a').all())
       expect((await link.boundingBox()).height, await link.innerText()).toBeGreaterThanOrEqual(40);
     if (width === 320) {
       const lines = await page.locator('.hero h1').evaluate(element => element.getBoundingClientRect().height / parseFloat(getComputedStyle(element).lineHeight));
       expect(Math.round(lines)).toBeLessThanOrEqual(3);
     }
     const hero = page.locator('.hero');
-    await expect(hero.locator('a[href="/account"]')).toBeVisible();
+    await expect(hero.locator('a[href="/start"]')).toBeVisible();
     await expect(hero.locator('figure figcaption')).toContainText('画面はイメージです');
-    for (const locator of await page.locator('a[href="/start"], .btn-primary small, .card-head, .chip-send').all()) {
+    for (const locator of await page.locator('a[href="/start"]:visible, .hero figcaption').all()) {
       await expect(locator).toBeVisible();
       expect(await contrastRatio(locator), await locator.innerText()).toBeGreaterThanOrEqual(4.5);
     }
@@ -114,11 +127,33 @@ for (const width of [320, 375, 768, 1280]) {
     const pricing = page.locator('#pricing');
     await expect(pricing).toBeVisible();
     await expect.poll(() => pricing.evaluate(element => Math.round(element.getBoundingClientRect().top))).toBeGreaterThanOrEqual(
-      await page.locator('header').evaluate(element => Math.ceil(element.getBoundingClientRect().bottom)) - 1,
+      await page.locator('header').evaluate(element => Math.max(0, Math.ceil(element.getBoundingClientRect().bottom))) - 1,
     );
     const pricingContent = await pricing.innerText();
     expect(pricingContent).toContain('先着10店舗');
     expect(pricingContent).toContain('月30件');
+    const pricingDetails = pricing.locator('details');
+    await expect(pricingDetails).toHaveCount(1);
+    await expect(pricingDetails).not.toHaveAttribute('open', '');
+    await pricingDetails.locator('summary').click();
+    await expect(pricingDetails).toHaveAttribute('open', '');
+    await expect(pricingDetails).toContainText('直近60日');
+    await expect(pricingDetails).toContainText('最大5件ずつLINEに届きます');
+    await expect(pricingDetails).toContainText('登録直後には届きません');
+    await expectNoOverflow(page);
+    await pricingDetails.locator('summary').click();
+    const registration = page.locator('#steps details');
+    await expect(registration).toHaveCount(1);
+    await expect(registration).not.toHaveAttribute('open', '');
+    await registration.locator('summary').click();
+    await expect(registration).toHaveAttribute('open', '');
+    await expect(registration).toContainText('LINEを開いてコードを送る');
+    await expect(registration).toContainText('送信矢印');
+    await expect(registration).toContainText('確認して登録画面へ進む');
+    await expect(registration).toContainText('通知先を確認して次へ');
+    await expectNoOverflow(page);
+    await registration.locator('summary').click();
+    await expect(registration).not.toHaveAttribute('open', '');
     const disclosures = page.locator('#faq details');
     await expect(disclosures).toHaveCount(5);
     for (const disclosure of await disclosures.all()) {
@@ -132,10 +167,10 @@ for (const width of [320, 375, 768, 1280]) {
     for (const summary of await page.locator('#faq summary').all()) await summary.click();
     await page.locator('#faq').screenshot({ path: `output/self-service/home-faq-${width}.png` });
     for (const summary of await page.locator('#faq summary').all()) await summary.click();
-    await page.evaluate(() => scrollTo(0, 0));
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await page.screenshot({ path: `output/self-service/home-improved-${width}.png`, fullPage: true });
     // Use page coordinates: element screenshots scroll a tall hero under the sticky header.
-    await page.evaluate(() => scrollTo(0, 0));
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     const heroClip = await hero.boundingBox();
     await page.screenshot({ path: `output/self-service/home-hero-${width}.png`, fullPage: true, clip: heroClip });
     expect(requests.some(request => request.path.startsWith('/api/self/'))).toBe(false);
@@ -164,15 +199,28 @@ test('home keyboard navigation exposes skip, CTA and native FAQ focus', async ({
 });
 
 test('home works without JavaScript and exposes support, pricing and existing-account links', async ({ browser }) => {
-  const context = await browser.newContext({ javaScriptEnabled: false, ignoreHTTPSErrors: true, viewport: { width: 375, height: 812 } });
+  // No-JS plus reduced motion avoids Playwright's rAF stability wait during animated anchors.
+  // Ordinary-motion pointer interactions are covered by all four viewport tests above.
+  const context = await browser.newContext({ javaScriptEnabled: false, reducedMotion: 'reduce', ignoreHTTPSErrors: true, viewport: { width: 375, height: 812 } });
   try {
     await restrictNetwork(context);
     const page = await context.newPage();
     await page.goto(app.baseURL + '/');
     await expect(page.locator('script')).toHaveCount(0);
-    await expect(page.locator('.hero a[href="/account"]')).toBeVisible();
+    await expect(page.locator('header a[href="/account"]')).toBeVisible();
+    await expectHomeImages(page);
+    const registration = page.locator('#steps details');
+    await registration.locator('summary').click();
+    await expect(registration).toHaveAttribute('open', '');
+    await expect(registration).toContainText('送信矢印');
+    await registration.locator('summary').click();
     await page.locator('a[href="#pricing"]:visible').first().click();
     await expect(page).toHaveURL(app.baseURL + '/#pricing');
+    const pricingDetails = page.locator('#pricing details');
+    await pricingDetails.locator('summary').click();
+    await expect(pricingDetails).toHaveAttribute('open', '');
+    await expect(pricingDetails).toContainText('直近60日');
+    await pricingDetails.locator('summary').click();
     for (const disclosure of await page.locator('#faq details').all()) {
       await disclosure.locator('summary').click();
       await expect(disclosure).toHaveAttribute('open', '');

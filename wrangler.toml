@@ -63,3 +63,8 @@ crons = ["*/5 * * * *"]
 type = "Text"
 globs = ["**/*.html", "**/*.css", "**/*.txt", "**/*.md"]
 fallthrough = true
+
+[[rules]]
+type = "Data"
+globs = ["**/*.webp"]
+fallthrough = true
