@@ -27,6 +27,11 @@ export const LIMITS = Object.freeze({
   processingConcurrency: 2,
   testCooldownMs: 60000,
   testsPerDay: 3,
+  // A registration that never started (no accepted terms) holds an intake slot
+  // for 2h from creation until LINE is verified, and for 24h from creation in
+  // total. Counted from created_at so a LINE code or reconnect cannot extend it.
+  unstartedPreLineMs: 2 * 3600000,
+  unstartedMs: 86400000,
 });
 export const SELF_LINE_PREFIX = "MEOS-";
 export const SELF_REPLY_PREFIX = "ss_";

@@ -65,8 +65,10 @@ test('LINE relinking cannot make an activated store eligible for abandoned-signu
   assert.deepEqual(row,{state:'line_pending',terms_version:'fixture-v1'});
   assert.ok(await db.prepare("SELECT owner_sub FROM google_credentials WHERE owner_sub='alice'").first());
 });
-for (const change of ['activate','refresh']) {
-  test(`retention rechecks abandonment atomically when ${change} wins the cleanup race`, async t => {
+// Activation inside the race keeps the store. Reissuing a LINE code does not:
+// the unstarted window counts from created_at, so it cannot be extended.
+for (const [change, retained] of [['activate', true], ['refresh', false]]) {
+  test(`retention rechecks abandonment atomically when ${change} races the cleanup`, async t => {
     const {db}=await withD1(t);await applySchema(db);
     let clock=now;
     const ctx=createSelfContext(fixtureEnv(db),{now:()=>clock,fetchImpl:async u=>
@@ -85,9 +87,9 @@ for (const change of ['activate','refresh']) {
     }};
     await purgeExpired({...ctx,db:raceDb});
     assert.equal(raced,true);
-    assert.ok(await db.prepare('SELECT id FROM stores WHERE id=?').bind(store.id).first());
-    assert.ok(await db.prepare("SELECT owner_sub FROM google_credentials WHERE owner_sub='alice'").first());
-    assert.ok(await db.prepare('SELECT store_id FROM location_claims WHERE store_id=?').bind(store.id).first());
+    assert.equal(Boolean(await db.prepare('SELECT id FROM stores WHERE id=?').bind(store.id).first()),retained);
+    assert.equal(Boolean(await db.prepare("SELECT owner_sub FROM google_credentials WHERE owner_sub='alice'").first()),retained);
+    assert.equal(Boolean(await db.prepare('SELECT store_id FROM location_claims WHERE store_id=?').bind(store.id).first()),retained);
   });
 }
 async function seedUsage(db, {id,period,kind='push',state='committed',created=now-150*day,scope='channel'}) {

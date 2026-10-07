@@ -13,7 +13,7 @@ import {
 import { requireMutation, readSession } from "./session.mjs";
 import { consumeRate, verifyChallenge, ipBucket } from "./abuse.mjs";
 import { googleJson } from "./google.mjs";
-import { findOwnedStore } from "./store-repository.mjs";
+import { findOwnedStore, countLiveSelfClaims } from "./store-repository.mjs";
 export async function verifyGoogleIdToken(
   token,
   { jwks, clientId, nonce, now = Date.now },
@@ -53,11 +53,10 @@ export async function startGoogle(ctx, request, { intent, challenge }) {
   }
   if (intent === "connect") {
     ensure(await canRegisterSelf(ctx, actor.sub), "REGISTRATION_CLOSED", 503);
-    const count = await ctx.db
-      .prepare("SELECT count(*) n FROM location_claims WHERE mode='self'")
-      .first();
+    // Unstarted registrations past their window stop holding a slot here even
+    // before the hourly cleanup deletes them (see abandonedRegistrationSql).
     ensure(
-      count.n < c.limits.maxActiveStores ||
+      (await countLiveSelfClaims(ctx)) < c.limits.maxActiveStores ||
         (actor.sub && (await findOwnedStore(ctx, actor.sub))),
       "CAPACITY_UNAVAILABLE",
       409,

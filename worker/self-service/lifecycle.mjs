@@ -1,5 +1,5 @@
 import { ensure, SelfError } from "./errors.mjs";
-import { requireStore, findOwnedStore } from "./store-repository.mjs";
+import { requireStore, findOwnedStore, abandonedRegistrationSql } from "./store-repository.mjs";
 import { verifyLocationAccess } from "./locations.mjs";
 import { readSelfConfig } from "./config.mjs";
 import { budgetStatement, reservationStatement } from "./budget.mjs";
@@ -89,7 +89,7 @@ export async function pauseStore(ctx, actor) {
 export async function disconnectStore(ctx, actor, { abandoned, expiredMetadata } = {}) {
   ensure(actor.sub, "LOGIN_REQUIRED", 401);
   if (abandoned)
-    ensure(Number.isFinite(abandoned.before) && abandoned.storeId, "INVALID_RETENTION_GUARD");
+    ensure(Number.isFinite(abandoned.before) && Number.isFinite(abandoned.preLineBefore) && abandoned.storeId, "INVALID_RETENTION_GUARD");
   const s = (await findOwnedStore(ctx, actor.sub)) ?? {
     id: "no-store:" + actor.sub,
   };
@@ -145,10 +145,12 @@ export async function disconnectStore(ctx, actor, { abandoned, expiredMetadata }
   ];
   if (abandoned) {
     // The cron's initial SELECT is only a candidate list. A concurrent activation
-    // or reconnect must win over cleanup, including between the read and batch.
+    // (or a LINE verification inside the 24h window) must win over cleanup,
+    // including between the read and batch. Reissuing a LINE code or
+    // reconnecting does not: the window counts from created_at.
     statements.unshift(ctx.db.prepare(
-      "INSERT INTO mutation_guards SELECT EXISTS(SELECT 1 FROM stores WHERE id=? AND owner_sub=? AND terms_version IS NULL AND updated_at<?)",
-    ).bind(abandoned.storeId, actor.sub, abandoned.before));
+      `INSERT INTO mutation_guards SELECT EXISTS(SELECT 1 FROM stores s WHERE s.id=? AND s.owner_sub=? AND ${abandonedRegistrationSql("s")})`,
+    ).bind(abandoned.storeId, actor.sub, abandoned.before, abandoned.preLineBefore));
     statements.push(ctx.db.prepare("DELETE FROM mutation_guards"));
   }
   if (expiredMetadata) {

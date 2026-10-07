@@ -21,7 +21,7 @@ function bounded(t,stats){
 }
 async function seedAbandoned(ctx){
  await claimLocation(ctx,{sub:'abandoned',accountId:'accounts/1',locationId:'locations/999',title:'架空店'});
- await ctx.db.prepare('UPDATE stores SET updated_at=? WHERE owner_sub=?').bind(ctx.now()-2*86400000,'abandoned').run();
+ await ctx.db.prepare('UPDATE stores SET created_at=?,updated_at=? WHERE owner_sub=?').bind(ctx.now()-2*86400000,ctx.now()-2*86400000,'abandoned').run();
 }
 async function seedReply(ctx,store,id,state='pending',createdAt=ctx.now()-2*3600000){
  const review={name:'架空利用者',text:'良かったです',rating:5,createTime:new Date(base).toISOString(),updateTime:new Date(base).toISOString()};
