@@ -27,7 +27,7 @@
 //   WHATSAPP_PHONE_NUMBER_ID — WhatsApp 送信元電話番号 ID
 //   WHATSAPP_VERIFY_TOKEN    — WhatsApp Webhook 検証トークン（任意文字列）
 
-import { createSelfContext } from './self-service/config.mjs';
+import { createSelfContext, readSelfConfig } from './self-service/config.mjs';
 import { handleSelfRequest } from './self-service/router.mjs';
 import { runSelfScheduled, legacyCronDue } from './self-service/scheduled.mjs';
 
@@ -41,6 +41,9 @@ export default {
     const url = new URL(request.url);
     const { method } = request;
     const path = url.pathname;
+
+    const moved = workersDevRedirect(request, env);
+    if (moved) return moved;
 
     try {
       const selfResponse = await handleSelfRequest(request, env, createSelfContext(env));
@@ -176,6 +179,37 @@ export default {
     }
   },
 };
+
+// ── workers.dev → 独自ドメインへの転送 ───────────────────────────────────────
+// 公開アドレスを SELF_PUBLIC_ORIGIN（独自ドメイン）へ移したあとも、配った紙・note・
+// 送信済み LINE の workers.dev リンクを生かすため、人が開く画面の GET/HEAD だけを転送する。
+// Webhook・API・OAuth 戻り先・Search Console 確認ファイル・/health・/admin は転送しない
+// （サーバー間の呼び出しと、workers.dev の所有権確認を壊さないため）。
+// SELF_PUBLIC_ORIGIN が workers.dev 自身・未設定・不正なら何もしない。
+const REDIRECT_PAGE_PATHS = new Set(['/', '/start', '/account']);
+export function workersDevRedirect(request, env) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return null;
+  const url = new URL(request.url);
+  if (!url.hostname.endsWith('.workers.dev')) return null;
+  const origin = readSelfConfig(env ?? {}).origin;
+  if (!origin) return null;
+  const target = new URL(origin);
+  if (target.hostname === url.hostname || target.hostname.endsWith('.workers.dev')) return null;
+  const path = url.pathname;
+  const page = REDIRECT_PAGE_PATHS.has(path) ||
+    path.startsWith('/account/replies/') ||
+    path.startsWith('/self/');
+  if (!page) return null;
+  return new Response(null, {
+    status: 301,
+    headers: {
+      Location: origin + path + url.search,
+      // 戻すときに古い転送がブラウザに残り続けないよう、キャッシュは1時間まで。
+      'Cache-Control': 'public, max-age=3600',
+      'Referrer-Policy': 'no-referrer',
+    },
+  });
+}
 
 // ── GBP ポーリング（Cron から呼び出し） ─────────────────────────────────────
 

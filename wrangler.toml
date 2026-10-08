@@ -3,6 +3,10 @@ main = "worker/index.mjs"
 compatibility_date = "2024-11-01"
 workers_dev = true
 preview_urls = false
+# 公開アドレス（独自ドメイン）。workers.dev は gbp-notify の転送・送信済みLINE・配布物の旧リンクのため残す。
+routes = [
+  { pattern = "meo.star-pocket.com", custom_domain = true },
+]
 
 # ── KV: 店舗設定 ──────────────────────────────────────────────────────────────
 # ローカル dev では wrangler が自動でエミュレート。
@@ -39,7 +43,7 @@ SELF_LINE_BUTTON_CONFIRM_ENABLED = "true"
 SELF_LINE_AUTO_BUTTON_ENABLED = "true"
 SELF_LINE_ONE_BUTTON_ENABLED = "true"
 SELF_LINE_AUTO_PIN_ENABLED = "false"
-SELF_PUBLIC_ORIGIN = "https://meo-harness.yosinn1.workers.dev"
+SELF_PUBLIC_ORIGIN = "https://meo.star-pocket.com"
 TURNSTILE_SITE_KEY = "0x4AAAAAAFE6uTVTTIAlwcWr"
 # Secret SELF_PILOT_OWNER_SHA256 を置くと、受付と処理を止めた本人限定モードになる。本番では置かない。
 # SELF_LINE_CHECK_DAILY_BYPASS_ENABLED は運営者本人だけの一時設定なので、ここには書かない。ダッシュボードで管理し、deploy の --keep-vars で残す。
