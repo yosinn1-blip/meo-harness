@@ -20,11 +20,14 @@ export async function startTestApp() {
       bundle: true,
       format: "esm",
       platform: "neutral",
+      // Match the Node/runtime fixture target; esnext binary uses Uint8Array.fromBase64 (Node 22 lacks it).
+      target: "es2022",
       loader: {
         ".html": "text",
         ".css": "text",
         ".txt": "text",
         ".md": "text",
+        ".webp": "binary",
       },
     });
     module = await import(pathToFileURL(outfile));
@@ -61,17 +64,23 @@ export async function startTestApp() {
   });
   await applySchema(db);
   let offset = 0;
-  const now = () => Date.now() + offset;
+  const realNow = Date.now;
+  const now = () => realNow() + offset;
   const f = await googleFixture({ now });
   const fixtureKey = crypto.randomUUID();
   const unexpected = [],
     writes = [],
     pushes = [],
-    feedback = [];
+    feedback = [],
+    loadings = [];
   const settings = {
     locations: 1,
     googleFailure: false,
     registration: true,
+    autoPin: false,
+    buttonConfirm: false,
+    autoButton: false,
+    lineFailure: null,
     reviews: [],
     quota: 200,
     consumed: 0,
@@ -145,6 +154,10 @@ export async function startTestApp() {
         feedback.push(JSON.parse(init.body));
         return Response.json({});
       }
+      if (u.pathname === "/v2/bot/chat/loading/start") {
+        loadings.push(JSON.parse(init.body));
+        return new Response(null, { status: 202 });
+      }
       if (u.pathname.endsWith("/quota"))
         return Response.json({ type: "limited", value: settings.quota });
       if (u.pathname.endsWith("/consumption"))
@@ -154,6 +167,8 @@ export async function startTestApp() {
         pushes.push(body);
         lastPin =
           body.messages[0]?.text?.match(/確認番号: (\d{6})/)?.[1] ?? lastPin;
+        if (settings.lineFailure === "unknown") throw new Error("fixture LINE result unknown after dispatch");
+        if (settings.lineFailure === "failed") return new Response(null,{status:400});
         return Response.json(
           {},
           { headers: { "x-line-request-id": "fixture-accepted" } },
@@ -188,7 +203,15 @@ export async function startTestApp() {
             return;
           }
           const data = body.length ? JSON.parse(body) : {};
-          if (url.pathname === "/fixture/authorize") {
+          if (url.pathname === "/fixture/line-card") {
+            const card=pushes.at(-1)?.messages[0];
+            if(card?.type!=="flex")throw Error("fixture button card missing");
+            const action=card.contents.footer.contents[0].action.data;
+            const uri=card.contents.footer.contents[1].action.uri;
+            response=new Response(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>架空LINE確認カード</title><style>body{font:18px/1.7 sans-serif;margin:24px;color:#111}button,a{display:block;font:inherit;padding:14px;margin:16px 0;text-align:center;border:1px solid #333;background:#fff;color:#111;text-decoration:none;box-sizing:border-box;width:100%}</style><h1>架空LINE確認カード</h1><p>実LINEには接続しない試験用画面です。</p><p>ご自身で始めた登録だけ確認し、心当たりがなければ押さないでください。</p><button id="confirm">${card.contents.footer.contents[0].action.label}</button><a id="return" href="${uri}">${card.contents.footer.contents[1].action.label}</a><p>${card.contents.footer.contents[2].text}</p><output id="fixture-result"></output><script>document.querySelector('#confirm').onclick=async()=>{const r=await fetch('/fixture/postback',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:${JSON.stringify(action)},userId:new URLSearchParams(location.search).get('user')||'line-fixture'})});document.querySelector('#fixture-result').textContent=r.ok?'架空署名イベントを処理しました':'架空処理失敗';};</script></html>`,{headers:{"Content-Type":"text/html; charset=utf-8"}});
+          } else if (url.pathname === "/fixture/line-chat") {
+            response = new Response(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>架空LINE・ローカル検証専用</title><style>body{font:18px sans-serif;margin:24px;color:#111}input,button{font:inherit;padding:12px;max-width:100%;box-sizing:border-box}output{display:block;font-size:28px;margin-top:24px}p{line-height:1.7}</style><h1>架空LINE画面</h1><p>ローカル検証専用。実際のLINEへ接続・送信していません。</p><label for="code">登録コード</label><input id="code"><button id="send">LINEへコード送信（架空）</button><output id="received" aria-live="polite"></output><script>document.querySelector('#send').onclick=async()=>{const r=await fetch('/fixture/line',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:document.querySelector('#code').value,userId:'line-fixture'})});const p=await(await fetch('/fixture/pin')).json();if(r.ok&&p.method==='button'){location.href='/fixture/line-card';return;}document.querySelector('#received').textContent=r.ok&&p.pin?'確認番号: '+p.pin:'送信結果を登録画面で確認してください';};</script></html>`, {headers:{"Content-Type":"text/html; charset=utf-8"}});
+          } else if (url.pathname === "/fixture/authorize") {
             const original = new URL(
               "https://accounts.google.com/o/oauth2/v2/auth",
             );
@@ -223,28 +246,40 @@ export async function startTestApp() {
               ],
             });
             const pending = [];
-            response = await module.default.fetch(
-              new Request(baseURL + "/webhook/line-bot", {
-                method: "POST",
-                body: raw,
-                headers: {
-                  "X-Line-Signature": await hmac(raw, env.LINE_CHANNEL_SECRET),
+            // Browser fixture advances time for expiry/rate tests. The legacy
+            // webhook creates its own context, so scope the same clock to that
+            // entrypoint and its waitUntil work; never add a production override.
+            const savedNow = Date.now;
+            try {
+              Date.now = now;
+              response = await module.default.fetch(
+                new Request(baseURL + "/webhook/line-bot", {
+                  method: "POST",
+                  body: raw,
+                  headers: {
+                    "X-Line-Signature": await hmac(raw, env.LINE_CHANNEL_SECRET),
+                  },
+                }),
+                env,
+                {
+                  waitUntil(p) {
+                    pending.push(p);
+                  },
                 },
-              }),
-              env,
-              {
-                waitUntil(p) {
-                  pending.push(p);
-                },
-              },
-            );
-            await Promise.all(pending);
+              );
+              await Promise.all(pending);
+            } finally { Date.now = savedNow; }
           } else if (url.pathname === "/fixture/pin")
-            response = Response.json({ pin: lastPin });
+            response = Response.json({ pin: lastPin, method: pushes.at(-1)?.messages[0]?.type === "flex" ? "button" : null });
           else if (url.pathname === "/fixture/scenario") {
             Object.assign(settings, data);
             if (data.pilot) Object.assign(env, await pilotSettings(data.pilotOwner ?? "alice"));
             env.SELF_REGISTRATION_ENABLED = String(settings.pilot ? false : settings.registration);
+            env.SELF_LINE_AUTO_PIN_ENABLED = String(settings.autoPin);
+            env.SELF_LINE_BUTTON_CONFIRM_ENABLED = String(settings.buttonConfirm);
+            env.SELF_LINE_AUTO_BUTTON_ENABLED = String(settings.autoButton);
+            if (data.lineFriendUrl !== undefined)
+              env.SELF_LINE_FRIEND_URL = data.lineFriendUrl;
             if (data.drafts !== undefined)
               env.SELF_MONTHLY_DRAFT_LIMIT = String(data.drafts);
             if (data.activeLimit !== undefined)
@@ -254,14 +289,24 @@ export async function startTestApp() {
             offset += data.ms;
             response = Response.json({ ok: true });
           } else if (url.pathname === "/fixture/cron") {
-            // Test clock only: exercise the actual production phase, not a
-            // replacement scheduler. Poll at JST 09-21; notify one hour later.
+            // Test clock only: exercise the actual production 5-minute slots,
+            // not a replacement scheduler. Poll in a :05 slot (JST 09-21, and
+            // after the 2h poll interval), draft at :10; notify in the next
+            // hour's :15 slot, more than one hour after the fetch.
+            const slotMs=300000;
             if(data.phase==='poll'){
-              let next=Math.ceil(now()/3600000)*3600000;
-              while(Math.floor(next/3600000)%2!==0 || new Date(next).getUTCHours()>12)next+=3600000;
+              const last=(await db.prepare("SELECT MAX(last_polled_at) t FROM stores").first())?.t ?? 0;
+              let next=Math.ceil(now()/slotMs)*slotMs;
+              while(new Date(next).getUTCMinutes()!==5 || new Date(next).getUTCHours()>12 || next<last+7200000)next+=slotMs;
               offset+=next-now();
-            } else if(data.phase==='notify') offset+=3600000;
-            await module.runSelfScheduled(ctx);
+              await module.runSelfScheduled(ctx,{scheduledTime:next});
+              offset+=slotMs;
+              await module.runSelfScheduled(ctx,{scheduledTime:next+slotMs});
+            } else if(data.phase==='notify'){
+              const next=Math.floor(now()/3600000)*3600000+3600000+15*60000;
+              offset+=next-now();
+              await module.runSelfScheduled(ctx,{scheduledTime:next});
+            } else await module.runSelfScheduled(ctx);
             response = Response.json({ ok: true });
           } else response = new Response(null, { status: 404 });
         } else {
@@ -303,7 +348,7 @@ export async function startTestApp() {
   baseURL = "https://127.0.0.1:" + server.address().port;
   env = fixtureEnv(db, {
     SELF_PUBLIC_ORIGIN: baseURL,
-    SELF_LINE_FRIEND_URL: "https://line.me/R/ti/p/@fixture",
+    SELF_LINE_FRIEND_URL: baseURL + "/fixture/line-chat",
     STORES: await mf.getKVNamespace("STORES"),
   });
   ctx = module.createSelfContext(env, { now, fetchImpl });
@@ -315,6 +360,7 @@ export async function startTestApp() {
     writes,
     pushes,
     feedback,
+    loadings,
     db,
     ctx,
     async stop() {

@@ -12,7 +12,7 @@ export async function buildWorker() {
     format: "esm",
     platform: "neutral",
     target: "es2022",
-    loader: { ".html": "text", ".css": "text", ".txt": "text", ".md": "text" },
+    loader: { ".html": "text", ".css": "text", ".txt": "text", ".md": "text", ".webp": "binary" },
   });
   return pathToFileURL(outfile).href;
 }

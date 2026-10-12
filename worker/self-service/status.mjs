@@ -3,6 +3,7 @@ import { findOwnedStore } from "./store-repository.mjs";
 import { readSelfConfig, canRegisterSelf } from "./config.mjs";
 import { dateKeys } from "./contracts.mjs";
 import { draftBudgetScope } from "./budget.mjs";
+import { readLineCheckStatus } from "./line-check-delivery.mjs";
 export async function getSelfStatus(ctx, request) {
   const c = readSelfConfig(ctx.env),
     s = await readSession(ctx, request);
@@ -15,6 +16,10 @@ export async function getSelfStatus(ctx, request) {
     registrationAllowed: await canRegisterSelf(ctx, s?.owner_sub),
     pilotMode: c.pilotMode,
     processingEnabled: c.processingEnabled,
+    lineAutoPin: c.autoLinePin,
+    lineAutoButton: c.autoLineButton,
+    lineButtonConfirm: c.lineButtonConfirm,
+    ...(ctx.env.SELF_LINE_ONE_BUTTON_ENABLED !== undefined ? {lineOneButton:c.lineOneButton} : {}),
     limits: c.limits,
     termsVersion: ctx.env.SELF_TERMS_VERSION ?? null,
     turnstileSiteKey: ctx.env.TURNSTILE_SITE_KEY ?? null,
@@ -82,6 +87,7 @@ export async function getSelfStatus(ctx, request) {
     store: { id: store.id, title: store.title },
     lineDetected: Boolean(store.pendingLineUserId),
     lineVerified: Boolean(store.lineVerifiedAt),
+    lineCheck: await readLineCheckStatus(ctx,store,s.token_hash),
     lastCheckedAt: store.lastPolledAt,
     lastError: store.lastError,
     usage: usage.results.map((x) => ({
@@ -91,4 +97,16 @@ export async function getSelfStatus(ctx, request) {
     })),
     notice: s.notice,
   };
+}
+// A LINE return/scanner must not create an anonymous session or expose another
+// browser's own registration. Only the original, still-live session resumes.
+export async function getLineReturnStatus(ctx,request) {
+  const session=await readSession(ctx,request);
+  const mismatch={ok:true,state:"line_return_mismatch",csrf:null};
+  if (!session?.owner_sub) return mismatch;
+  const store=await findOwnedStore(ctx,session.owner_sub);
+  if (!store) return mismatch;
+  const link=await ctx.db.prepare("SELECT session_hash FROM line_links WHERE store_id=?").bind(store.id).first();
+  if (link?.session_hash!==session.token_hash) return mismatch;
+  return getSelfStatus(ctx,request);
 }

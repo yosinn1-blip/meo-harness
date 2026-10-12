@@ -1,13 +1,35 @@
 import { readSelfConfig } from "./config.mjs";
-import { dateKeys } from "./contracts.mjs";
+import { LIMITS, dateKeys, jstDayStart, jstHour } from "./contracts.mjs";
 import { getStore } from "./store-repository.mjs";
 import { storeGuard } from "./lifecycle.mjs";
 import { seal, unseal, tokenKey } from "./crypto.mjs";
 import { reservePush, sendReservedPush } from "./budget.mjs";
 import { buildFlexPayload } from "../../src/line-flex.mjs";
 import { ensure } from "./errors.mjs";
+// A store's JST day is used by any digest keyed to it, or by any digest that
+// was attempted or accepted on it. last_attempt_at (0006) is the time this
+// code last called LINE's push for the digest: written just before the push
+// and, on acceptance, set to the acceptance time in the same transaction as
+// the push reservation commit (so the acceptance day is held even if the row's
+// own save then fails). Attempts only start from JST 09:00 to 20:59 (an attempt
+// begun at 20:59:59 may finish seconds after 21:00), so a push is never
+// accepted on the JST day after its attempt. A claim that does not
+// call LINE (quota hold, inactive store, or the local close of an already
+// committed reservation) never writes it.
+// next_attempt_at is only the retry due time and lease_until only the lease.
+// Rows written before 0006 have no last_attempt_at, so their retry or
+// acceptance time is unknown: such a row with a first attempt in the last
+// 24 h (the safety stop ends every attempt within 24 h of the first) holds
+// the day, which can only over-hold, never allow a second LINE.
+export function usedDaySql(dayParam, dayStartParam) {
+  return `(n.day_key=${dayParam} OR n.first_attempt_at>=${dayStartParam} OR n.last_attempt_at>=${dayStartParam} OR (n.last_attempt_at IS NULL AND n.first_attempt_at IS NOT NULL AND n.first_attempt_at>=${dayStartParam}-86400000))`;
+}
 export async function sendSelfDigest(ctx, storeId) {
   if (!readSelfConfig(ctx.env).processingEnabled) return;
+  // Start only from JST 09:00 to 20:59, retries of an earlier day's digest
+  // included: the morning promise, and no push accepted after JST midnight
+  // (see usedDaySql). The check is at the start of the attempt.
+  if (jstHour(ctx.now()) < 9 || jstHour(ctx.now()) >= LIMITS.notifyEndHourJst) return;
   const store = await getStore(ctx, storeId);
   if (store?.state !== "active" || !store.lineUserId) return;
   let notification = await ctx.db
@@ -18,21 +40,20 @@ export async function sendSelfDigest(ctx, storeId) {
     .first();
   if (!notification) {
     const day = dateKeys(ctx.now()).day;
-    if (new Date(ctx.now() + 9 * 3600000).getUTCHours() < 9) return;
     if (
       await ctx.db
         .prepare(
-          "SELECT id FROM notification_jobs WHERE store_id=? AND day_key=?",
+          "SELECT id FROM notification_jobs n WHERE n.store_id=?1 AND " + usedDaySql("?2", "?3"),
         )
-        .bind(storeId, day)
+        .bind(storeId, day, jstDayStart(ctx.now()))
         .first()
     )
       return;
     const rows = await ctx.db
       .prepare(
-        "SELECT r.*,j.payload_ciphertext,j.created_at AS job_created_at FROM replies r JOIN review_jobs j ON j.id=r.job_id WHERE r.store_id=? AND r.generation=? AND r.state='pending' AND j.stage='draft_ready' AND r.expires_at>? AND r.id NOT IN (SELECT reply_id FROM notification_items) ORDER BY j.created_at,r.id LIMIT 5",
+        "SELECT r.*,j.payload_ciphertext,j.created_at AS job_created_at FROM replies r JOIN review_jobs j ON j.id=r.job_id WHERE r.store_id=? AND r.generation=? AND r.state='pending' AND j.stage='draft_ready' AND r.expires_at>? AND j.created_at>? AND j.payload_ciphertext IS NOT NULL AND r.draft_ciphertext IS NOT NULL AND r.id NOT IN (SELECT reply_id FROM notification_items) ORDER BY j.created_at,r.id LIMIT 5",
       )
-      .bind(storeId, store.generation, ctx.now())
+      .bind(storeId, store.generation, ctx.now(), ctx.now() - LIMITS.reviewKeepMs)
       .all();
     if (!rows.results.length) return;
     const reviews = [];
@@ -139,7 +160,17 @@ export async function sendSelfDigest(ctx, storeId) {
       id: reservationId,
       storeId,
     });
-    if (!reservation.ok) return;
+    if (!reservation.ok) {
+      // Quota exhausted/unknown: hold this digest for an hour instead of
+      // re-reading the LINE quota in every notify slot.
+      await ctx.db
+        .prepare(
+          "UPDATE notification_jobs SET next_attempt_at=? WHERE id=? AND lease_id=?",
+        )
+        .bind(ctx.now() + 3600000, notification.id, lease)
+        .run();
+      return;
+    }
     const current = await getStore(ctx, storeId);
     ensure(
       current?.state === "active" &&
@@ -147,12 +178,17 @@ export async function sendSelfDigest(ctx, storeId) {
       "STORE_INACTIVE",
       409,
     );
-    await ctx.db
-      .prepare(
-        "UPDATE notification_jobs SET first_attempt_at=COALESCE(first_attempt_at,?) WHERE id=? AND lease_id=?",
-      )
-      .bind(ctx.now(), notification.id, lease)
-      .run();
+    // An already committed reservation means LINE accepted this digest in an
+    // earlier attempt whose row update was lost: close it locally without
+    // calling LINE and keep that attempt's time (see usedDaySql).
+    const callsLine = !reservation.committed;
+    if (callsLine)
+      await ctx.db
+        .prepare(
+          "UPDATE notification_jobs SET first_attempt_at=COALESCE(first_attempt_at,?),last_attempt_at=? WHERE id=? AND lease_id=?",
+        )
+        .bind(ctx.now(), ctx.now(), notification.id, lease)
+        .run();
     const payload = JSON.parse(
       await unseal(
         notification.payload_ciphertext,
@@ -164,10 +200,16 @@ export async function sendSelfDigest(ctx, storeId) {
       id: reservationId,
       ...payload,
       retryKey: notification.retry_key,
+      onAccepted: (acceptedAt) => [
+        ctx.db
+          .prepare("UPDATE notification_jobs SET last_attempt_at=? WHERE id=?")
+          .bind(acceptedAt, notification.id),
+      ],
     });
     await ctx.db.batch([
       ctx.db
         .prepare(
+          // last_attempt_at was saved with the reservation commit.
           "UPDATE notification_jobs SET state='accepted',accepted_request_id=?,lease_id=NULL,lease_until=NULL WHERE id=? AND lease_id=?",
         )
         .bind(result.requestId ?? null, notification.id, lease),
@@ -193,6 +235,17 @@ export async function sendSelfDigest(ctx, storeId) {
           lease,
         )
         .run();
+    } else {
+      // Result unknown (timeout/5xx) or an unexpected failure: keep the same
+      // reservation and retry key (LINE de-duplicates it) and the 24 h stop,
+      // but wait 30 min so this digest does not take every notify slot.
+      await ctx.db
+        .prepare(
+          "UPDATE notification_jobs SET next_attempt_at=? WHERE id=? AND lease_id=?",
+        )
+        .bind(ctx.now() + 1800000, notification.id, lease)
+        .run()
+        .catch(() => {});
     }
     throw e;
   } finally {

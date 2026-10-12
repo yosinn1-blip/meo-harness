@@ -145,3 +145,19 @@ test("callback after disconnect cannot restore credentials or a session", async 
   );
   assert.equal(await db.prepare("SELECT * FROM sessions").first(), null);
 });
+test("account chooser is requested on every first-time connect only", async (t) => {
+  const { db } = await withD1(t);
+  await applySchema(db);
+  const f = await googleFixture();
+  const ctx = createSelfContext(fixtureEnv(db), { fetchImpl: f.fetchImpl });
+  const prompt = async (s, body) =>
+    new URL((await startGoogle(ctx, startRequest(s), { challenge: "x", ...body })).authorizationUrl)
+      .searchParams.get("prompt");
+  const anonymous = await createSession(ctx, null);
+  assert.equal(await prompt(anonymous, { intent: "connect" }), "select_account consent");
+  // Reconnect keeps the same account; login stays silent.
+  assert.equal(await prompt(anonymous, { intent: "login" }), null);
+  await seedStore(ctx);
+  const owner = await createSession(ctx, "alice");
+  assert.equal(await prompt(owner, { intent: "reconnect" }), "consent");
+});

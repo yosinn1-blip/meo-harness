@@ -17,15 +17,21 @@ import {
 } from "../../worker/self-service/approvals.mjs";
 async function setup(
   t,
-  { state = "active", manual = false, timeout = false } = {},
+  { state = "active", manual = false, timeout = false, loadingFailure = false } = {},
 ) {
   const { db } = await withD1(t);
   await applySchema(db);
   let writes = 0;
+  const loading = [];
   let comment = manual ? "店主の返信" : null;
   const ctx = createSelfContext(fixtureEnv(db), {
     fetchImpl: async (input, init = {}) => {
       const u = String(input);
+      if (u === "https://api.line.me/v2/bot/chat/loading/start") {
+        loading.push({init, body: JSON.parse(init.body)});
+        if (loadingFailure) throw new Error("fixture loading unavailable");
+        return new Response(null, {status: 202});
+      }
       if (u.includes("/token"))
         return Response.json({ access_token: "fixture" });
       if (init.method === "PUT") {
@@ -64,7 +70,7 @@ async function setup(
       ctx.now() + 86400000,
     )
     .run();
-  return { ctx, writes: () => writes };
+  return { ctx, writes: () => writes, loading };
 }
 const event = (action = "approve", userId = "line-a") => ({
   webhookEventId: crypto.randomUUID(),
@@ -210,8 +216,9 @@ test("an expired reconciliation cannot erase a newer posting lease with its stal
 });
 test("obsolete unknown replies cannot starve a current recoverable reply in scheduled reconciliation", async (t) => {
   const { ctx } = await setup(t);
-  const notifyHour=Math.floor(ctx.now()/7200000)*7200000+3600000;
-  ctx.now=()=>notifyHour;
+  // Reconciliation runs in the :25 settle slot of every hour.
+  const settleSlot=Math.floor(ctx.now()/3600000)*3600000+25*60000;
+  ctx.now=()=>settleSlot;
   await ctx.db.prepare("UPDATE replies SET state='post_unknown'").run();
   await ctx.db
     .prepare("UPDATE review_jobs SET stage='post_unknown',next_attempt_at=0")
@@ -253,4 +260,29 @@ test("obsolete unknown replies cannot starve a current recoverable reply in sche
       .state,
     "pending",
   );
+});
+
+for (const loadingFailure of [false, true]) {
+  test(`LINE-08: valid approval shows loading and posts even if loading fails (${loadingFailure})`, async t => {
+    const {ctx, loading, writes} = await setup(t, {loadingFailure});
+    const e = event();
+    assert.equal((await handleSelfPostback(ctx, e)).code, 'POSTED');
+    assert.equal(loading.length, 1);
+    assert.deepEqual(loading[0].body, {chatId: 'line-a', loadingSeconds: 30});
+    assert.equal(loading[0].init.method, 'POST');
+    assert.ok(loading[0].init.signal instanceof AbortSignal);
+    assert.equal(writes(), 1);
+    await handleSelfPostback(ctx, e);
+    await handleSelfPostback(ctx, event());
+    assert.equal(loading.length, 1, 'duplicate and handled approvals do not start loading');
+  });
+}
+test('LINE-08: edit, stale revision and unauthorized actions never show loading', async t => {
+  const {ctx, loading} = await setup(t);
+  assert.equal((await handleSelfPostback(ctx,event('edit'))).code, 'EDIT_WAITING');
+  assert.equal((await handleSelfPostback(ctx,event('approve','other'))).code, 'LINE_ACTOR_DENIED');
+  const e = event(); e.postback.data = 'approve:ss_r:r2';
+  assert.equal((await handleSelfPostback(ctx,e)).code, 'DRAFT_CHANGED');
+  await handleSelfPostback(ctx,event('skip'));
+  assert.equal(loading.length, 0);
 });

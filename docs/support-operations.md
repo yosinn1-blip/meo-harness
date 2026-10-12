@@ -24,6 +24,20 @@
 
 利用者から「停止・切断・削除」を頼まれた場合も、メールに書かれた店舗名だけで実行しない。可能なら本人にアカウント画面から操作してもらう。ログイン不可なら権限と対象を確認する個別対応とし、確認方法・影響範囲・承認が揃う前に管理操作しない。Googleで公開済みの返信は、このサービスの接続切断では取り消せない。
 
+## 受付枠が埋まっている（CAPACITY_UNAVAILABLE）と言われたとき
+
+受付枠（`SELF_MAX_ACTIVE_STORES`）は「利用開始済みの店舗」と「期限内の未開始の登録」の合計で数える。未開始の登録（利用条件に同意していないもの）は、作成から2時間（LINE確認前）または24時間（LINE確認後）で自動的に数えなくなる。期限は作成時刻から数えるので、LINEコードの再発行やGoogle再接続では延びない。数えなくなった登録は毎時 :00 の片付けで1件ずつ削除される。運営者が手で切断する必要は基本的にない。
+
+この状態が続くときは、まず読み取りだけで内訳を確かめる（運営者の承認を得てから実行する。書き込みSQLは使わない）。
+
+```sh
+npx wrangler d1 execute meo-harness-self-service --remote --command "SELECT CASE WHEN terms_version IS NOT NULL THEN 'started' WHEN line_verified_at IS NOT NULL THEN 'line_verified' ELSE 'pre_line' END AS kind, count(*) AS n, min(created_at) AS oldest_ms, max(created_at) AS newest_ms FROM stores GROUP BY kind"
+```
+
+- `started` だけで上限に達しているなら仕様どおり。枠を増やすかは、Groq・LINE送信枠（月の共有枠）と合わせて判断する。
+- `pre_line`・`line_verified` が多く、作成時刻が短い間隔で並んでいるなら嫌がらせの可能性がある。期限切れは自動で枠から外れるので、繰り返されるときは Turnstile の設定確認や `SELF_REGISTRATION_ENABLED` の一時停止を検討する（設定変更は承認を取ってから）。
+- 特定の登録を手書きの DELETE で消さない。関連表が多く、切断処理（`disconnectStore`）と同じ順序・条件を保てないため。
+
 ## 返信の下書き例（自動送信しない）
 
 ### 追加情報を確認する
@@ -47,5 +61,6 @@
 - [ ] 問い合わせメール・添付の保管先、閲覧権限、保存期間・削除手順を決め、正式なプライバシー案内に反映。フォーム側の非保存と受信メール側の保存は別。
 - [ ] 本番の `/start`・`/account` → FAQ → 報告 → メール作成の導線を公開後に確認。
 - [ ] サービス全体の公開条件は `docs/self-service-release.md` も確認。FAQ追加だけで受付を開かない。
+- [ ] LINE公式アカウント（@477byprh・GBP Notify と共用）のあいさつ文が、MEO の登録途中の案内（入力欄のコードを送信→確認カード待ち）と GBP Notify 向けの1行の両方を含むこと。まだ友だち追加していないテスト用アカウントで表示を確認する（2026-10-06 に設定済み。友だち追加時は中継 gbp-notify-api の follow 返信も届く）。
 
 設定の都合で受付方式を後から変える場合も、確認画面と実際の送信・受信を区別し、個人情報の扱いを先に決める。

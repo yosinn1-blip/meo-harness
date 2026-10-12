@@ -1,6 +1,7 @@
 import { disconnectStore } from "./lifecycle.mjs";
 import { dateKeys } from "./contracts.mjs";
 import { migrateDraftBudget } from "./budget.mjs";
+import { abandonedRegistrationSql, registrationCutoffs } from "./store-repository.mjs";
 export async function purgeExpired(ctx) {
   if (!ctx.db) return;
   const n = ctx.now();
@@ -9,24 +10,28 @@ export async function purgeExpired(ctx) {
   const draftCutoff = n - 7 * 86400000;
   const draftMonth = dateKeys(draftCutoff).month;
   await migrateDraftBudget(ctx);
+  const [unstartedBefore, preLineBefore] = registrationCutoffs(n);
   const expired = await ctx.db
     .prepare(
-      "SELECT s.id,s.owner_sub,s.generation,s.metadata_fetched_at FROM stores s WHERE (s.terms_version IS NULL AND s.updated_at<?) OR s.metadata_fetched_at IS NULL OR s.metadata_fetched_at<=? ORDER BY COALESCE(s.metadata_fetched_at,0),s.updated_at,s.id LIMIT 1",
+      `SELECT s.id,s.owner_sub,s.generation,s.metadata_fetched_at FROM stores s WHERE ${abandonedRegistrationSql("s")} OR s.metadata_fetched_at IS NULL OR s.metadata_fetched_at<=? ORDER BY COALESCE(s.metadata_fetched_at,0),s.updated_at,s.id LIMIT 1`,
     )
-    .bind(n - 86400000, n - 21 * 86400000)
+    .bind(unstartedBefore, preLineBefore, n - 21 * 86400000)
     .all();
   for (const row of expired.results)
     await disconnectStore(ctx, { sub: row.owner_sub },
       row.metadata_fetched_at === null || row.metadata_fetched_at <= n - 21 * 86400000
         ? {expiredMetadata:{storeId:row.id,generation:row.generation,fetchedAt:row.metadata_fetched_at,before:n-21*86400000}}
-        : {abandoned: { storeId: row.id, before: n - 86400000 }});
+        : {abandoned: { storeId: row.id, before: unstartedBefore, preLineBefore }});
+  // Keep one :00 slot within the per-invocation D1 bound: a store deletion
+  // defers the general cleanup batch to the next hourly cleanup.
+  if (expired.results.length) return;
   await ctx.db.batch([
     ctx.db
       .prepare(
         "DELETE FROM line_events WHERE event_id IN (SELECT event_id FROM line_events WHERE created_at<? LIMIT 100)",
       )
       .bind(n - 30 * 86400000),
-    ctx.db.prepare("DELETE FROM line_edits WHERE expires_at<=?").bind(n),
+    ctx.db.prepare("DELETE FROM line_edits WHERE expires_at<=?").bind(n - 2 * 3600000),
     ctx.db.prepare(
       "DELETE FROM reply_revisions WHERE reply_id IN (SELECT v.reply_id FROM reply_revisions v LEFT JOIN replies r ON r.id=v.reply_id WHERE r.id IS NULL OR r.draft_ciphertext IS NULL LIMIT 100)",
     ),

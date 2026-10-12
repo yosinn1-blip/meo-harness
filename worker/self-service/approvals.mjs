@@ -6,6 +6,10 @@ import { googleAccessToken } from "./google.mjs";
 import { getGbpReview, postGbpReply } from "../../src/gbp.mjs";
 import { seal, unseal, tokenKey, sha256 } from "./crypto.mjs";
 import { storeGuard } from "./lifecycle.mjs";
+import { SEND_DISPLAY_TEXT, EDIT_DISPLAY_TEXT } from "../../src/line-flex.mjs";
+// Button taps echo these as the user's bubble. LINE delivers them as postbacks,
+// not messages; this guard only keeps an echo from ever becoming a draft.
+const BUTTON_ECHOES = new Set([SEND_DISPLAY_TEXT, EDIT_DISPLAY_TEXT]);
 export function classifyCurrentReview({
   current,
   approvedDraft,
@@ -35,8 +39,18 @@ async function replyData(ctx, id) {
   ensure(s, "NOT_FOUND", 404);
   return { r, j, s };
 }
-const EDIT_WINDOW_MS = 10 * 60000;
-const CANCEL_WORDS = new Set(["やめる", "やめます", "キャンセル", "中止"]);
+const EDIT_WINDOW_MS = 30 * 60000;
+const EDIT_NOTICE_GRACE_MS = 2 * 3600000;
+const CANCEL_WORDS = new Set([
+  "やめる", "やめます", "やめ", "やめて", "やめた", "やめとく", "やめときます",
+  "キャンセル", "きゃんせる", "キャンセルします", "キャンセルで",
+  "取り消し", "取消", "とりけし", "取り消します", "中止", "中止します", "中止で",
+]);
+function cancelKey(body) {
+  return body.normalize("NFKC").replace(/\s+/gu, "")
+    .replace(/^[「『"'“‘(（]+/u, "")
+    .replace(/[」』"'”’)）。、.,!?~〜ー…・♪\p{Extended_Pictographic}️]+$/u, "");
+}
 async function draftRev(ctx, id) {
   const row = await ctx.db
     .prepare("SELECT rev FROM reply_revisions WHERE reply_id=?")
@@ -160,6 +174,20 @@ export async function reconcileReply(ctx, id) {
         lease,
       );
 }
+async function showLoading(ctx, userId) {
+  if (readSelfConfig(ctx.env).pilotMode || !ctx.env.LINE_CHANNEL_ACCESS_TOKEN) return;
+  try {
+    await ctx.fetchImpl("https://api.line.me/v2/bot/chat/loading/start", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + ctx.env.LINE_CHANNEL_ACCESS_TOKEN,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ chatId: userId, loadingSeconds: 30 }),
+      signal: AbortSignal.timeout(3000),
+    });
+  } catch {} // Best effort only; never prevent the approved reply from posting.
+}
 export async function handleSelfPostback(ctx, event) {
   try {
     ensure(readSelfConfig(ctx.env).processingEnabled, "PROCESSING_CLOSED", 503);
@@ -198,13 +226,14 @@ export async function handleSelfPostback(ctx, event) {
     if (!receipt.meta.changes) return { ok: false, code: "DUPLICATE_EVENT" };
     if (action === "edit") {
       if (r.state !== "pending") return { ok: false, code: "ALREADY_HANDLED" };
+      const { draft } = await texts(ctx, r, j);
       await ctx.db
         .prepare(
           "INSERT INTO line_edits VALUES (?,?,?) ON CONFLICT(line_user_id) DO UPDATE SET reply_id=excluded.reply_id,expires_at=excluded.expires_at",
         )
         .bind(event.source.userId, id, ctx.now() + EDIT_WINDOW_MS)
         .run();
-      return { ok: true, code: "EDIT_WAITING" };
+      return { ok: true, code: "EDIT_WAITING", replyId: id, currentDraft: draft };
     }
     if (["posting", "post_unknown"].includes(r.state))
       return reconcileReply(ctx, id);
@@ -226,6 +255,7 @@ export async function handleSelfPostback(ctx, event) {
     // A card from before a rewrite must not post the rewritten text.
     const rev = await draftRev(ctx, id);
     if (cardRev !== rev) return { ok: false, code: "DRAFT_CHANGED" };
+    await showLoading(ctx, event.source.userId);
     const { draft, review } = await texts(ctx, r, j);
     const args = {
       accessToken: await googleAccessToken(ctx, s.ownerSub),
@@ -309,10 +339,11 @@ export async function handleSelfEditText(ctx, event) {
     !event.source.userId
   )
     return null;
+  if (BUTTON_ECHOES.has(String(event.message.text ?? "").trim())) return null;
   const userId = event.source.userId;
   const session = await ctx.db
     .prepare("SELECT * FROM line_edits WHERE line_user_id=? AND expires_at>?")
-    .bind(userId, ctx.now())
+    .bind(userId, ctx.now() - EDIT_NOTICE_GRACE_MS)
     .first();
   if (!session) return null;
   const id = session.reply_id;
@@ -334,9 +365,17 @@ export async function handleSelfEditText(ctx, event) {
       .run();
     if (!receipt.meta.changes) return { ok: false, code: "DUPLICATE_EVENT", replyId: id };
     const body = String(event.message.text ?? "").trim();
-    if (CANCEL_WORDS.has(body)) {
+    if (CANCEL_WORDS.has(cancelKey(body))) {
       await endSession();
       return { ok: true, code: "EDIT_CANCELLED", replyId: id };
+    }
+    if (session.expires_at <= ctx.now()) {
+      await endSession();
+      // Only explain the lapse while the draft can still be edited; after it
+      // was posted, expired or stopped, a later chat line is ordinary chat.
+      if (r.state !== "pending" || r.expires_at <= ctx.now() || s.state !== "active" || r.generation !== s.generation)
+        return null;
+      return { ok: false, code: "EDIT_EXPIRED", replyId: id };
     }
     if (!body || body.length > 1200)
       return { ok: false, code: "EDIT_INVALID", replyId: id };

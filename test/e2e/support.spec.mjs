@@ -78,6 +78,8 @@ test('mobile report requires input and consent; clipboard failure leaves selecta
   await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { value: { writeText: async () => { throw new Error('fixture denied'); } } }));
   await page.goto(app.baseURL + '/self/help/report');
   await expect(page.getByLabel('行った操作')).toHaveCSS('padding-left', '12px');
+  // The consent tap-target rule is scoped to the start screen; report keeps its top alignment.
+  await expect(page.locator('.report-consent')).toHaveCSS('align-items', 'flex-start');
   await page.getByRole('button', { name: 'メール内容を確認する', exact: true }).click();
   await expect(page.getByRole('link', { name: 'メールアプリを開く', exact: true })).toBeHidden();
   await fillReport(page);
@@ -134,12 +136,35 @@ test('a report requires consent and nonblank details and recovers after correcti
   const mail = page.getByRole('link', { name: 'メールアプリを開く', exact: true });
   await expect(mail).toBeHidden();
   await page.getByLabel('パスワード・認証コード・お客様の個人情報を含めていないことを確認しました').check();
-  await page.getByLabel('行った操作').fill('   ');
+  await page.getByLabel('起きたこと・相談したいこと').fill('   ');
   await page.getByRole('button', { name: 'メール内容を確認する', exact: true }).click();
   await expect(mail).toBeHidden();
-  await page.getByLabel('行った操作').fill('アカウントを開いた');
+  await page.getByLabel('起きたこと・相談したいこと').fill('番号が届きません');
   await page.getByRole('button', { name: 'メール内容を確認する', exact: true }).click();
   await expect(mail).toBeVisible();
+});
+
+test('a report needs only the topic, what happened and consent; skipped fields read as unfilled', async ({ page }) => {
+  await page.goto(app.baseURL + '/self/help/report');
+  await page.getByLabel('相談する内容').selectOption('line');
+  await page.getByLabel('起きたこと・相談したいこと').fill('確認カードが届きません');
+  await page.getByLabel('パスワード・認証コード・お客様の個人情報を含めていないことを確認しました').check();
+  await page.getByRole('button', { name: 'メール内容を確認する', exact: true }).click();
+  const mail = page.getByRole('link', { name: 'メールアプリを開く', exact: true });
+  await expect(mail).toBeVisible();
+  const body = new URL(await mail.getAttribute('href')).searchParams.get('body');
+  expect(body).toContain('画面：未記入');
+  expect(body).toContain('【行った操作】\n未記入\n');
+  expect(requests.some(r => r.method !== 'GET')).toBe(false);
+});
+
+test('quickstart guide reads on a 320px phone without sideways scrolling', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.goto(app.baseURL + '/self/help/quickstart');
+  await expect(page.getByRole('heading', { name: '使い方', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'よくある質問', exact: true })).toHaveAttribute('href', '/self/help/faq');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'output/self-service/support-quickstart-320.png', fullPage: true });
 });
 
 test('copy success never claims receipt and pending copy feedback cannot revive an edited preview', async ({ page }) => {

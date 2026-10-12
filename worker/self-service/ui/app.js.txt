@@ -1,12 +1,34 @@
 const root = document.querySelector("#current-step"),
   errorBox = document.querySelector("#error");
+const lineReturnQuery = new URLSearchParams(location.search).get("openExternalBrowser") === "1";
+let returningFromLine = lineReturnQuery || Boolean(location.hash);
+let lineConfirmLink = takeLineConfirmLink();
+// Capture before async boot, then erase even malformed fragments. Never send
+// the PIN in a GET/query, persist it, or treat opening a URL as confirmation.
+function takeLineConfirmLink() {
+  const hash = location.hash;
+  if (!hash) return null;
+  try { history.replaceState(null, "", location.pathname + location.search); }
+  catch { return null; }
+  if (!lineReturnQuery) return null;
+  const parts = new URLSearchParams(hash.slice(1));
+  if (parts.size !== 3 || ["line-confirm", "store", "expires"].some(k => parts.getAll(k).length !== 1)) return null;
+  const pin = parts.get("line-confirm"), storeId = parts.get("store"), rawExpiry = parts.get("expires");
+  const expiresAt = Number(rawExpiry);
+  if (!/^\d{6}$/.test(pin ?? "") || !/^[A-Za-z0-9_-]{1,128}$/.test(storeId ?? "") ||
+      !/^[1-9]\d*$/.test(rawExpiry ?? "") || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return null;
+  return {pin, storeId, expiresAt};
+}
+let lineConfirmLinkFresh = Boolean(lineConfirmLink),
+  lineConfirmLinkTimer = null;
 let state = null,
   lineCode = null,
-  pinSent = false,
+  lineCodeExpiresAt = 0,
   nextCursor = null,
   challengeToken = "",
   challengeWidget = null,
   rendered = "",
+  lineIdleSince = null,
   busy = false;
 const messages = {
   LOGIN_REQUIRED:
@@ -15,11 +37,20 @@ const messages = {
     "現在、新規受付を停止しています。すでに利用中の方はGoogleでログインできます。",
   CAPACITY_UNAVAILABLE:
     "現在の受付枠がいっぱいです。時間をおいて再度確認してください。",
-  CHALLENGE_FAILED: "本人確認をもう一度行ってから接続してください。",
+  CHALLENGE_FAILED:
+    "ロボットでないことの自動チェックをやり直しています。画面上のチェックが終わってから、もう一度ボタンを押してください。",
+  CHALLENGE_LOAD_FAILED: "確認の画面を読み込めませんでした。ページを再読み込みしてください。",
   PIN_INVALID:
-    "確認番号が違うか、有効期限が切れています。新しい番号を送って確認してください。",
+    "確認番号が違うか、有効期限が切れています。LINEのトークでいちばん新しく届いたカードか番号を使ってください（前に届いたものは使えません）。届いていなければ、新しく送り直してください。",
   LINE_BROWSER_MISMATCH:
     "この画面で登録コードを再発行して、LINEから送り直してください。",
+  LINE_CONFIRMATION_INVALID: "確認の有効期限が切れたか、確認方法が切り替わりました。状態を更新し、新しい確認メッセージでやり直してください。",
+  LINE_BUTTON_DISABLED: "ボタン確認は現在利用できません。番号による確認へ切り替えてください。",
+  LINE_CHECK_BUSY: "確認番号の送信処理中です。少し待って状態を更新してください。",
+  QUOTA_UNKNOWN: "LINEの送信枠を確認できないため保留しています。時間をおいて状態を確認してください。",
+  LINE_SEND_FAILED: "LINEへ確認番号を送れませんでした。友だち追加・ブロック設定を確認して再送してください。",
+  LINE_RETRY_REQUIRED: "LINEの送信を保留しました。少し待ってから再送してください。",
+  PROCESSING_CLOSED: "現在、LINEへの送信を保留しています。時間をおいて状態を確認してください。",
   LINE_PENDING_REQUIRED: "先にLINEへ登録コードを送ってください。",
   RATE_LIMITED: "操作回数の上限に達しました。少し待ってからお試しください。",
   QUOTA_EXHAUSTED: "利用枠が足りないため保留しました。追加課金は行いません。",
@@ -40,6 +71,11 @@ const messages = {
   NOT_FOUND:
     "表示できる本文がありません。有効期限やログイン中のアカウントを確認してください。",
 };
+const buttonMessages = {
+  LINE_CHECK_BUSY: "確認メッセージの送信処理中です。少し待って状態を更新してください。",
+  LINE_SEND_FAILED: "LINEへ確認メッセージを送れませんでした。友だち追加・ブロック設定を確認してください。",
+  LINE_RESULT_UNKNOWN: "LINEへの送信結果を確認できません。届いたボタンは期限内なら使えます。自動では再送しません。",
+};
 function node(tag, text, cls) {
   const e = document.createElement(tag);
   if (text !== undefined) e.textContent = text;
@@ -49,12 +85,41 @@ function node(tag, text, cls) {
 function showError(error) {
   errorBox.hidden = false;
   errorBox.textContent =
-    messages[error.code] ??
+    (state?.lineButtonConfirm && state?.lineCheck?.method === "button" ? buttonMessages[error.code] : null) ?? messages[error.code] ??
     "処理を完了できませんでした。状態を更新してやり直してください。";
   errorBox.tabIndex = -1;
   errorBox.focus();
 }
+function discardLineConfirmLink() {
+  clearTimeout(lineConfirmLinkTimer); lineConfirmLinkTimer = null;
+  lineConfirmLinkFresh = false;
+  if (lineConfirmLink) {
+    const pin = document.querySelector("#pin");
+    if (pin) pin.value = "";
+  }
+  lineConfirmLink = null;
+}
+function expireLineConfirmLink() {
+  if (!lineConfirmLink || lineConfirmLink.expiresAt > Date.now()) return false;
+  discardLineConfirmLink();
+  return true;
+}
+function armLineConfirmLinkExpiry() {
+  clearTimeout(lineConfirmLinkTimer);
+  if (!lineConfirmLink) return;
+  lineConfirmLinkTimer = setTimeout(() => {
+    if (!expireLineConfirmLink()) {armLineConfirmLinkExpiry(); return;}
+    rendered = "";
+    if (state) render().catch(showError);
+  }, Math.max(0, lineConfirmLink.expiresAt - Date.now()));
+}
+function liveLineConfirmLink(check = state?.lineCheck) {
+  return Boolean(lineConfirmLink && state?.lineOneButton === true && state.state === "line_pending" &&
+    state.lineDetected && state.store?.id === lineConfirmLink.storeId && check?.pinAvailable &&
+    check.method !== "button" && check.expiresAt === lineConfirmLink.expiresAt && lineConfirmLink.expiresAt > Date.now());
+}
 async function api(path, body) {
+  if (body !== undefined) discardLineConfirmLink();
   const response = await fetch("/api/self/" + path, {
     method: body === undefined ? "GET" : "POST",
     headers:
@@ -70,6 +135,53 @@ async function api(path, body) {
   const data = await response.json();
   if (!response.ok || !data.ok) throw data;
   return data;
+}
+// One-button mode: remember which check was sent as a number-only text, so the
+// guidance does not point at the card that this send invalidated. Only expiry
+// timestamps are kept (never the number); a new card send replaces them.
+// Stored forms: "<expiresAt>" (number-only send accepted), "<expiresAt>:unknown"
+// (a number-only send whose result is unknown issued this check) and
+// "from:<previous expiresAt or 0>" (a number-only send started; the server
+// replaces the previous check before dispatch, so any newer check came from it).
+const PIN_ONLY_KEY = "meo-line-pin-only";
+let pinOnlyExpiresAt = null, pinOnlyUnknown = false, pinOnlyFrom = null;
+try {
+  const saved = String(sessionStorage.getItem(PIN_ONLY_KEY) ?? "");
+  const from = /^from:(\d+)$/.exec(saved), at = /^(\d+)(:unknown)?$/.exec(saved);
+  if (from) pinOnlyFrom = Number(from[1]);
+  else if (at) { pinOnlyExpiresAt = Number(at[1]) || null; pinOnlyUnknown = Boolean(pinOnlyExpiresAt && at[2]); }
+} catch {}
+function storePinOnly() {
+  try {
+    if (pinOnlyFrom !== null) sessionStorage.setItem(PIN_ONLY_KEY, "from:" + pinOnlyFrom);
+    else if (pinOnlyExpiresAt) sessionStorage.setItem(PIN_ONLY_KEY, pinOnlyExpiresAt + (pinOnlyUnknown ? ":unknown" : ""));
+    else sessionStorage.removeItem(PIN_ONLY_KEY);
+  } catch {}
+}
+function rememberPinOnly(expiresAt, unknown = false) {
+  pinOnlyExpiresAt = expiresAt || null;
+  pinOnlyUnknown = Boolean(pinOnlyExpiresAt && unknown);
+  pinOnlyFrom = null;
+  storePinOnly();
+}
+function startPinOnly(previousExpiresAt) {
+  pinOnlyFrom = Number(previousExpiresAt) || 0;
+  storePinOnly();
+}
+// A card send or a new registration code must not inherit an unresolved
+// number-only attempt, or its valid card would be shown as that attempt's
+// result. A settled marker stays: it only matches its own check, so a replaced
+// check ignores it.
+function forgetPinOnlyAttempt() {
+  if (pinOnlyFrom === null) return;
+  pinOnlyFrom = null;
+  storePinOnly();
+}
+// After a timeout or a lost response the browser never learns the send's
+// result. A check newer than the one seen before that send was issued by it.
+function bindPinOnly(check) {
+  if (pinOnlyFrom !== null && check?.pinAvailable && check.expiresAt && check.expiresAt !== pinOnlyFrom)
+    rememberPinOnly(check.expiresAt, true);
 }
 function button(text, action, cls = "") {
   const b = node("button", text, cls);
@@ -89,7 +201,7 @@ function button(text, action, cls = "") {
       document
         .querySelectorAll("button")
         .forEach(
-          (x) => (x.disabled = Boolean(x.dataset.oauth && !challengeToken)),
+          (x) => (x.disabled = Boolean((x.dataset.oauth && !challengeToken) || x.dataset.locked === "true")),
         );
     }
   };
@@ -108,6 +220,33 @@ function link(label, url) {
   a.rel = "noopener noreferrer";
   return a;
 }
+function lineChatUrl() {
+  try {
+    const url = new URL(state.lineFriendUrl);
+    const match = /^\/R\/ti\/p\/([^/]+)\/?$/.exec(url.pathname);
+    if (url.origin !== "https://line.me" || url.username || url.password ||
+        url.search || url.hash || !match) return null;
+    const id = decodeURIComponent(match[1]);
+    if (!/^@[A-Za-z0-9._-]{1,64}$/.test(id)) return null;
+    return "https://line.me/R/oaMessage/" + encodeURIComponent(id);
+  } catch { return null; }
+}
+function liveLineCode() {
+  return typeof lineCode === "string" && /^MEOS-[A-HJ-NP-Z2-9]{12}$/.test(lineCode) &&
+    Number.isFinite(lineCodeExpiresAt) && lineCodeExpiresAt > Date.now();
+}
+function lineReturnHelp(after = state.lineOneButton ? "LINEの確認カードから進んだら" : state.lineAutoButton ? "LINEの「1 このLINEで確認」を押したら" : "送ったら") {
+  return node("p", after + "、スマホのアプリ切替で、この画面を開いているSafari・Chromeへ戻ってください。登録を始めたタブを選ぶと続きを進められます。", "small");
+}
+const CHALLENGE_WAIT = "確認中です。数秒で押せるようになります。チェック欄が出たときは、それを押してください。";
+const CHALLENGE_RETRY = "確認をやり直しています。少しお待ちください。";
+let challengeLoadFailed = false;
+function challengeStatus(t) {
+  const p = document.querySelector("#challenge-status");
+  if (!p) return;
+  p.textContent = t;
+  p.hidden = !t;
+}
 async function loadChallenge() {
   if (!state.turnstileSiteKey || challengeToken) return;
   const target = document.querySelector("#challenge");
@@ -119,12 +258,13 @@ async function loadChallenge() {
       action: "self_start",
       callback: (t) => {
         challengeToken = t;
+        challengeStatus("");
         document
           .querySelectorAll("[data-oauth]")
           .forEach((b) => (b.disabled = busy));
       },
-      "expired-callback": clearChallenge,
-      "error-callback": clearChallenge,
+      "expired-callback": () => { clearChallenge(); challengeStatus(CHALLENGE_RETRY); },
+      "error-callback": () => { clearChallenge(); challengeStatus(CHALLENGE_RETRY); },
     });
   };
   if (window.turnstile) return render();
@@ -132,7 +272,12 @@ async function loadChallenge() {
   script.src =
     "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
   script.onload = render;
-  script.onerror = () => showError({ code: "CHALLENGE_FAILED" });
+  script.onerror = () => {
+    // The alert carries the reload instruction; do not repeat it in the status line.
+    challengeLoadFailed = true;
+    challengeStatus("");
+    showError({ code: "CHALLENGE_LOAD_FAILED" });
+  };
   document.head.append(script);
 }
 function clearChallenge() {
@@ -156,22 +301,66 @@ async function google(intent) {
     clearChallenge();
     if (window.turnstile && challengeWidget !== null)
       window.turnstile.reset(challengeWidget);
+    if (!challengeToken) challengeStatus(CHALLENGE_WAIT);
     throw error;
   }
 }
 async function refresh(force = false) {
-  state = await api("status");
-  const fingerprint = JSON.stringify(state) + lineCode + pinSent;
-  if (!force && fingerprint === rendered) return;
-  rendered = fingerprint;
+  // Local expiry must clear the proof even if this GET later fails/offline.
+  expireLineConfirmLink();
+  const previous = state;
+  state = await api(returningFromLine ? "line/return-status" : "status");
+  if (state.lineOneButton) bindPinOnly(state.lineCheck);
+  if (lineConfirmLink && !liveLineConfirmLink()) discardLineConfirmLink();
+  if (state.lineDetected || !["location_selected", "line_pending"].includes(state.state)) {
+    lineCode = null;
+    lineCodeExpiresAt = 0;
+  }
+  if (state.lineAutoPin && state.lineDetected && state.lineCheck?.state === "idle") {
+    lineIdleSince ??= Date.now();
+    state.lineCheck = {...state.lineCheck,
+      state: Date.now()-lineIdleSince < 90000 ? "awaiting" : "held",
+      code: Date.now()-lineIdleSince < 90000 ? null : "LINE_RETRY_REQUIRED"};
+  } else lineIdleSince = null;
+  // This countdown is not displayed. Its ticking value must not replace the
+  // input or focus when the user returns from LINE to read the same PIN.
+  const displayState = {...state, lineCheck: state.lineCheck
+    ? {...state.lineCheck, retryAfterMs: 0} : state.lineCheck};
+  const fingerprint = JSON.stringify(displayState) + lineCode + liveLineCode();
+  const linkFingerprint = fingerprint + Boolean(lineConfirmLink);
+  if (!force && linkFingerprint === rendered) return;
+  // A rate limit becoming available must not erase a live PIN being entered.
+  // Preserve only this same store/challenge, never a resent or expired PIN.
+  const oldPin = document.querySelector("#pin");
+  const pinEntry = !lineConfirmLinkFresh && oldPin && state.lineCheck?.pinAvailable && previous?.lineCheck?.pinAvailable &&
+    previous.store?.id === state.store?.id && previous.lineCheck.expiresAt === state.lineCheck.expiresAt
+    ? {value:oldPin.value,focused:document.activeElement===oldPin,start:oldPin.selectionStart,end:oldPin.selectionEnd} : null;
+  // Status polling must not collapse account controls while they are in use.
+  // Keep this only within the same step/store; consent is never persisted.
+  const accountActionsOpen = previous?.state === state.state && previous?.store?.id === state.store?.id &&
+    document.querySelector("#setup-account-actions")?.open;
+  rendered = linkFingerprint;
   await render();
+  const accountActions = document.querySelector("#setup-account-actions");
+  if (accountActionsOpen && accountActions) accountActions.open = true;
+  lineConfirmLinkFresh = false;
+  const currentPin = document.querySelector("#pin");
+  if (pinEntry && currentPin) {
+    currentPin.value = pinEntry.value;
+    if (pinEntry.focused) {currentPin.focus();currentPin.setSelectionRange(pinEntry.start,pinEntry.end);}
+  }
 }
 async function mutate(path, body = {}) {
   await api(path, body);
   await refresh(true);
 }
 async function code() {
-  lineCode = (await api("line/code", {})).code;
+  // A new registration starts a new check; an earlier lost number-only send
+  // must not be bound to the card that this registration sends.
+  forgetPinOnlyAttempt();
+  const result = await api("line/code", {});
+  lineCode = result.code;
+  lineCodeExpiresAt = result.expiresAt;
   await refresh(true);
 }
 function progress() {
@@ -225,13 +414,32 @@ async function locations(cursor = null) {
         "small",
       ),
     );
-  if (!result.locations.length && !cursor)
+  if (!result.locations.length && !cursor) {
     list.append(
       node(
         "p",
         "管理できる店舗が見つかりませんでした。お店を管理しているGoogleアカウントかご確認ください。",
       ),
     );
+    // A partial provider failure is not proof of a wrong account.
+    if (!result.partial)
+      list.append(
+        node(
+          "p",
+          "お店のGoogleマップを管理している方（オーナーさんなど）のGoogleアカウントで入り直してください。下のボタンで最初の画面に戻り、「初めての方：Googleでお店を接続」から選び直せます。オーナーが別の方なら、この画面のURLかチラシをその方へお渡しください。",
+          "small",
+        ),
+        button(
+          "別のGoogleアカウントで入り直す",
+          async () => {
+            await api("logout", {});
+            lineCode = null;
+            location.assign("/start");
+          },
+          "secondary",
+        ),
+      );
+  }
   document.querySelector("#more")?.remove();
   if (nextCursor) {
     const b = button(
@@ -268,13 +476,82 @@ function dangerConfirm(kind) {
     button("戻る", () => render(), "secondary"),
   );
 }
+function lineDailyLimitHint(check) {
+  return check?.dailySendLimit === null
+    ? "本人の試用中は1日の回数制限を解除しています。1分に1回・共有の送信枠内で利用できます。"
+    : null;
+}
+function lineLimitNotice(check) {
+  if (check.sendLimit?.kind === "daily") {
+    text("今日は確認メッセージの送信上限（3回）に達しました。", "next-action");
+    const retry = new Intl.DateTimeFormat("ja-JP", {timeZone:"Asia/Tokyo",month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).format(check.sendLimit.retryAt);
+    text("届いているカード・番号は期限内なら使えます。新しい送信は" + retry + "以降、この画面で状態を確認してください。Googleの再接続は不要です。", "small");
+  } else if (check.sendLimit?.kind === "minute") {
+    text("確認メッセージの再送は少し待ってください。", "small");
+  }
+}
+function lockLineSend(control, check, pending = false) {
+  const locked = pending || Boolean(check.sendLimit);
+  control.dataset.locked = String(locked);
+  control.disabled = busy || locked;
+  return control;
+}
+function renderButtonCheck(check) {
+  const pending=["awaiting","preparing","sending"].includes(check.state);
+  text("LINEは検出済みです。通知先の確認を続けてください。");
+  if (check.buttonAvailable) {
+    text("LINEの確認操作を受け取りました。このお店の通知先として使うことを確認し、次へ進んでください。", "next-action");
+    root.append(button("通知先を確認して次へ",()=>mutate("line/confirm",{confirmed:true})));
+  } else if (pending) text(state.lineOneButton
+    ? "確認カードの送信状況を確認しています。届いたカードの「確認して登録画面へ進む」を押してください。自動では再送しません。"
+    : "確認メッセージの送信状況を確認しています。届いたカードの「1 このLINEで確認」を押してください。自動では再送しません。", "next-action");
+  else if (check.expiresAt) {
+    text("LINEの確認ボタンはまだ受け取っていません。", "next-action");
+    text("次に：LINEの「1 このLINEで確認」を押し、「2 登録画面へ戻る」からこのブラウザへ戻ってください。戻る操作だけでは確認は完了しません。", "next-action");
+    if (lineChatUrl()) {
+      const open=link("LINEのカードで「1 このLINEで確認」を押す",lineChatUrl());open.referrerPolicy="no-referrer";
+      root.append(open,node("p","このリンクでLINEのトークを開き、届いた確認カードを選んでください。","small"),lineReturnHelp("確認ボタンを押したら"));
+    }
+  } else if (check.sendLimit) text(check.buttonExpired
+    ? "確認カードの5分間の期限が切れました。"
+    : "現在、新しい確認メッセージは送れません。", "next-action");
+  else text(check.buttonExpired
+    ? "確認カードの5分間の期限が切れました。「確認メッセージをLINEに送る」を押して、新しいカードで確認してください。"
+    : "次に：「確認メッセージをLINEに送る」を押してください。番号の入力は不要です。", "next-action");
+  if (check.code) text(check.code==="LINE_RESULT_UNKNOWN"
+    ? "送信結果を確認できません。届いたボタンは期限内なら使えます。自動では再送しません。"
+    : buttonMessages[check.code]??messages[check.code]??"送信を完了できませんでした。状態を更新してください。", "small");
+  const send=button("確認メッセージをLINEに送る",async()=>{
+    try {await api("line/button",{});} catch(error){await refresh(true);throw error;}
+    await refresh(true);
+  },check.expiresAt||pending?"secondary":"");
+  lockLineSend(send,check,pending);
+  if (!check.expiresAt && !check.buttonAvailable) root.append(send);
+  else {
+    const again=node("details",undefined,"setup-recovery");
+    again.append(node("summary","届かない・期限切れ・確認方法を切り替える"),
+      node("p","再送や番号確認への切替では、前のボタンと確認操作は使えなくなります。新しい送信は利用枠と回数に数えます。","small"),send);
+    root.append(again);
+  }
+  const fallback=node("details",undefined,"setup-recovery");
+  fallback.append(node("summary","ボタンを使えない場合は番号で確認"),
+    node("p","新しい6桁をLINEに送り、この元ブラウザで入力します。前のボタンは無効になります。","small"));
+  const pin=button("番号で確認に切り替えて送る",async()=>{
+    try {await api("line/test",{});}catch(error){await refresh(true);throw error;}
+    await refresh(true);
+  },"secondary");lockLineSend(pin,check,pending);fallback.append(pin);root.append(fallback);
+  text(lineDailyLimitHint(check) ?? "5分以内にLINEのボタンを押し、この元画面で通知先を確定してください。送信は1分に1回、1日3回まで。受付と実際の到着は別です。", "small");
+  if (lineDailyLimitHint(check)) text("5分以内にLINEのボタンを押し、この元画面で通知先を確定してください。受付と実際の到着は別です。", "small");
+}
 async function render() {
   progress();
   root.replaceChildren();
-  document.querySelector("#challenge").hidden = ![
-    "anonymous",
-    "needs_google_reconnect",
-  ].includes(state.state);
+  const needsChallenge = ["anonymous", "needs_google_reconnect"].includes(state.state);
+  document.querySelector("#challenge").hidden = !needsChallenge;
+  challengeStatus(needsChallenge && state.turnstileSiteKey && !challengeToken && !challengeLoadFailed
+    ? CHALLENGE_WAIT : "");
+  const notes = document.querySelector("section.notes");
+  if (notes) notes.hidden = ["active", "paused"].includes(state.state);
   const replyPath = /^\/account\/replies\/(ss_[\w-]+)$/.exec(location.pathname);
   if (replyPath && state.state !== "anonymous") {
     const r = await api("replies/" + replyPath[1]);
@@ -285,19 +562,32 @@ async function render() {
       node("h3", "返信案"),
       node("div", r.draftText, "review-full"),
     );
-    text("内容を確認したら、LINEの承認ボタンから投稿してください。");
+    text("内容を確認したら、LINEの「送信」ボタンから投稿してください。");
     return;
   }
-  if (state.state === "anonymous") {
+  if (state.state === "line_return_mismatch") {
+    heading("登録を始めた画面へ戻ってください");
+    text("このブラウザでは、登録を始めた本人の画面を確認できません。", "next-action");
+    text("アプリ切替で、設定を始めたSafari・Chromeのタブへ戻ってください。別のタブやプライベートモードが開いた場合も、元のタブを選んでください。");
+    // This screen cannot tell the confirmation method (the response carries no
+    // registration details), and only some methods send a six-digit number.
+    text("LINEのカードやメッセージに6桁の確認番号が書かれている場合は、元のタブでその番号を入力し、「確認する」を押してください。番号がない場合は、元のタブに表示される案内に沿って進めてください。", "small");
+    root.append(button("元の登録画面を再確認",()=>refresh(true),"secondary"));
+    return;
+  } else if (state.state === "anonymous") {
     heading(
       state.registrationOpen ? "Googleでお店を接続" : "新規受付はお休み中です",
     );
-    text(
-      "Googleアカウントのパスワードを、この画面やAIのチャットに入力する必要はありません。",
-    );
-    if (state.registrationOpen)
-      root.append(oauthButton("Googleで接続", "connect"));
-    root.append(oauthButton("Googleでログイン", "login", "secondary"));
+    if (state.registrationOpen) {
+      root.append(node("h3", "初めて登録する方"));
+      text("次に：Googleマップのお店ページを管理しているGoogleアカウント（オーナーさんなど）を選び、Googleの画面で許可してください。", "next-action");
+      root.append(oauthButton("初めての方：Googleでお店を接続", "connect"));
+      text("管理している方が別にいる場合は、その方にこの画面を開いてもらってください。", "small");
+    }
+    root.append(node("h3", "登録済み・設定の続きを進める方"));
+    text("接続したGoogleアカウントでログインすると、設定の続きや停止・再開の画面へ進めます。", "small");
+    root.append(oauthButton("登録済みの方：Googleでログイン", "login", "secondary"));
+    text("パスワードはGoogleの画面にだけ入れます。この画面に入力する欄はありません。", "small");
     await loadChallenge();
   } else if (
     (!state.store && !state.registrationAllowed) ||
@@ -320,7 +610,8 @@ async function render() {
   } else if (state.state === "google_connected") {
     heading("あなたのお店を選んでください");
     if (state.pilotMode) text("本人限定・1店舗の接続テストです。AI生成・LINE送信・口コミ公開は停止中です。");
-    text("このGoogleアカウントで管理できる店舗だけを表示します。");
+    text("次に：返信案を受け取りたいお店の名前を確認し、「この店舗を使う」を押してください。", "next-action");
+    text("このGoogleアカウントで管理できる店舗だけを表示します。1つのGoogleアカウントで登録できるのは1店舗です。", "small");
     const list = node("div");
     list.id = "locations";
     root.append(list);
@@ -328,78 +619,250 @@ async function render() {
   } else if (["location_selected", "line_pending"].includes(state.state)) {
     heading("いつものLINEを通知先に");
     text(state.store.title);
-    if (lineCode) {
-      root.append(link("LINEで友だち追加", state.lineFriendUrl));
-      const qr = node("img", undefined, "qr");
-      qr.src = "/self/assets/line-qr.svg";
-      qr.alt = "LINE友だち追加のQRコード";
-      root.append(qr);
-      const c = node("output", lineCode, "code");
-      c.dataset.testid = "line-code";
-      root.append(
-        c,
-        button(
-          "登録コードをコピー",
-          () => navigator.clipboard.writeText(lineCode),
-          "secondary",
-        ),
-      );
-      text(
-        "このコードをLINEボットへ送ってください。有効期限は15分です。",
-        "small",
-      );
+    if (!state.lineDetected) {
+      if (lineCode && !liveLineCode()) {
+        text("登録コードの期限が切れました。再発行してからLINEへ送ってください。", "next-action");
+        root.append(button("コードを再発行", code));
+      } else if (lineCode) {
+        const chat = lineChatUrl();
+        root.append(node("h3", "まず、LINEでコードを送る"));
+        if (chat) {
+          text("初回は、まず友だち追加の画面が出ます。追加したら、この画面に戻って同じボタンをもう一度押してください。", "next-action");
+          text("LINEが開いたら、入力欄の右側にある送信ボタン（矢印）を1回押してください。開いただけでは登録されません。", "next-action");
+          const open = link("LINEを開いてコードを送る", chat + "/?" + encodeURIComponent(lineCode));
+          open.referrerPolicy = "no-referrer";
+          open.onclick = (event) => {
+            if (busy || !liveLineCode() || state.lineDetected || lineChatUrl() !== chat) {
+              event.preventDefault();
+              if (!busy) refresh(true).catch(showError);
+            }
+          };
+          root.append(open);
+          text("コードはLINEの入力欄に入ります。自動送信はされません。", "small");
+        } else text("下の補助欄でコードをコピーし、MEO HarnessのLINEトークへ送ってください。");
+        text("登録コードは15分間有効です。", "small");
+        root.append(node("h3", state.lineAutoButton ? "送ったら、LINEのカードで確認して戻る" : state.lineAutoPin ? "送ったら、LINEの6桁を読んで、この画面へ戻る" : "送ったら、この画面へ戻る"));
+        if (state.lineAutoButton) text(state.lineOneButton
+          ? "送信後はLINEのトークで確認カードが届くまで待ち、「確認して登録画面へ進む」を押してください。"
+          : "送信後はLINEのトークで確認カードが届くまで待ち、「1 このLINEで確認」→「2 登録画面へ戻る」の順に押してください。", "next-action");
+        else if (state.lineAutoPin) text("送信後はLINEに届く6桁の番号を読み、この登録画面へ戻ってください。", "next-action");
+        if (!state.lineOneButton) root.append(lineReturnHelp());
+        text(state.lineAutoButton
+          ? state.lineOneButton ? "カードのボタンを押すと、登録画面が開きます。確認番号が入力済みになっていたら、「通知先を確認して次へ」を押してください。カードは5分間有効です。リンクは他の人へ転送しないでください。" : "登録コードを送ると、確認カードを自動で1通送ります。1で確認してから2で元のブラウザへ戻り、「通知先を確認して次へ」を押してください。カードは5分間有効です。届かない・期限切れの場合は、この元画面で状況を確認して明示的に送り直せます。"
+          : state.lineAutoPin
+          ? "LINEに届いた6桁をこの画面へ入力します。番号は5分間有効です。届かない場合も、この画面で送信状況を確認できます。"
+          : state.lineButtonConfirm
+            ? state.lineOneButton ? "LINEを検出した後、確認カードの「確認して登録画面へ進む」を押してください。戻った元画面で「通知先を確認して次へ」を押します。" : "LINEを検出すると「確認メッセージをLINEに送る」が表示されます。送ったカードの「1 このLINEで確認」を押し、「2 登録画面へ戻る」でこの元画面へ戻ります。"
+            : "LINEを検出すると「確認番号をLINEに送る」が表示されます。押した後、LINEで6桁を読み、この画面で入力します。");
+        const help = node("details", undefined, "setup-recovery");
+        help.open = !chat;
+        help.append(node("summary", "LINEが開かない・友だち追加・PCから登録する方"));
+        help.append(node("p", "MEO Harnessをブロック中の場合は解除してください。", "small"));
+        help.append(node("p", "LINEが未インストールの場合は案内に沿ってインストールし、同じブラウザの登録タブへ戻ります。コードの期限が切れたら再発行してください。", "small"));
+        help.append(node("p", "PCからの登録や、コードが入力されない場合は、下のコードをコピーしてLINEのMEO Harnessトークへ貼り付け、送信します。", "small"));
+        const c = node("output", lineCode, "code");
+        c.dataset.testid = "line-code";
+        help.append(
+          c,
+          button("登録コードをコピー", async () => {
+            if (!liveLineCode()) return refresh(true);
+            await navigator.clipboard.writeText(lineCode);
+          }, "secondary"),
+        );
+        if (state.lineFriendUrl) help.append(link("LINEで友だち追加", state.lineFriendUrl));
+        const qr = node("img", undefined, "qr");
+        qr.src = "/self/assets/line-qr.svg";
+        qr.alt = "LINE友だち追加のQRコード";
+        help.append(node("p", "別の端末でLINEを開く方：友だち追加QR", "small"), qr,
+          button("コードを再発行", code, "secondary"));
+        root.append(help);
+      } else {
+        text("中断・画面更新でコードが消えた場合は、下のボタンで新しいコードを表示します。前のコードは使えなくなります。", "small");
+        root.append(button("LINEの登録コードを表示", code));
+      }
     } else {
-      root.append(button("LINEの登録コードを表示", code));
-    }
-    root.append(button("コードを再発行", code, "secondary"));
-    if (state.lineDetected) {
-      text("LINEを検出しました。届いた番号で通知先を確認します。", "success");
-      root.append(
-        button("確認番号をLINEに送る", async () => {
-          pinSent = false;
-          await api("line/test", {});
-          pinSent = true;
+      const check = state.lineCheck ?? { state: "idle", pinAvailable: false };
+      const pending = ["awaiting", "preparing", "sending"].includes(check.state);
+      const fromLink = liveLineConfirmLink(check);
+      const linkMissing = check.state === "link_missing";
+      const sameBrowser = !linkMissing && check.state !== "browser_mismatch";
+      const oneCard = state.lineOneButton && sameBrowser && !fromLink;
+      const pinOnlyMatch = oneCard && check.pinAvailable && Boolean(check.expiresAt) && check.expiresAt === pinOnlyExpiresAt;
+      const pinOnly = pinOnlyMatch && !pinOnlyUnknown;
+      // A number-only send with an unknown result still replaced the earlier card.
+      const pinOnlyUnsure = pinOnlyMatch && pinOnlyUnknown;
+      lineLimitNotice(check);
+      if (linkMissing) {
+        text("LINEは検出していますが、通知先の確認をやり直す必要があります。", "success");
+        if (!check.sendLimit) text(state.lineAutoButton
+          ? state.lineOneButton ? "次に：「LINEの登録コードを再発行」を押してLINEへ送ってください。新しいカードの「確認して登録画面へ進む」を押し、戻った元画面で通知先を確認します。" : "次に：「LINEの登録コードを再発行」を押し、LINEへ送ってください。そのまま新しいカードの「1 このLINEで確認」を押してから、「2 登録画面へ戻る」で戻ってください。"
+          : "次に：「LINEの登録コードを再発行」を押し、表示された案内に沿ってLINEへ送ってください。この画面に戻ると、確認メッセージを送れるようになります。", "next-action");
+        root.append(lockLineSend(button("LINEの登録コードを再発行", code),check));
+      } else if (sameBrowser && state.lineButtonConfirm && check.method === "button") renderButtonCheck(check);
+      else {
+      text(state.lineButtonConfirm && !sameBrowser
+        ? "LINEを検出しました。元の登録画面で通知先を確認してください。"
+        : fromLink ? "LINEの確認リンクを受け取りました。確認番号は入力済みです。" : state.lineOneButton ? "LINEを検出しました。届いた確認メッセージで通知先を確認します。" : "LINEを検出しました。6桁の番号で通知先を確認します。", "success");
+      if (!sameBrowser) {
+        text("設定を始めたブラウザへ戻ってください。そちらを使えない場合は、下の補助欄でコードを再発行し、LINEへ送り直してください。", "next-action");
+      } else if (pending) {
+        text(oneCard && !pinOnlyMatch
+          ? "確認カードの送信状況を確認しています。届いたら、カードの「確認して登録画面へ進む」を押してください。"
+          : "確認番号の送信状況を確認しています。届いた番号は、状況の更新後にこの画面へ入力できます。", "next-action");
+      } else if (check.pinAvailable) {
+        text(fromLink ? "内容を確認し、「通知先を確認して次へ」を押してください。リンクを開いただけでは、通知先は確定しません。"
+          : pinOnly ? "次に：LINEに番号だけのメッセージを送りました。いちばん新しいメッセージの6桁を下に入力し、「確認する」を押してください。前に届いたカードのボタンは使えません。"
+          : pinOnlyUnsure ? "次に：番号だけのメッセージを送れたか確認できませんでした。LINEに番号が届いていれば、いちばん新しい6桁を下に入力し、「確認する」を押してください。届いていなければ「カードが届かない・期限が切れたとき」を開き、「確認カードをもう一度送る」を押してください。前に届いたカードのボタンは使えません。"
+          : state.lineOneButton ? "次に：LINEに届いたカードの「確認して登録画面へ進む」を押してください。押せないときは、カードに書かれた6桁を下に入力して「確認する」を押してください。"
+          : "次に：LINEに届いている6桁を入力し、「確認する」を押してください。", "next-action");
+      } else if (!check.sendLimit) {
+        text(oneCard
+          ? check.state === "sent"
+            ? "確認カードの期限が切れたか、番号の照合回数の上限に達しました。次に：「確認カードをもう一度送る」を押してください。"
+            : "次に：「確認カードをもう一度送る」を押してください。"
+          : check.state === "sent"
+          ? "確認番号の期限が切れたか、照合の上限に達しました。新しい番号を送って確認してください。"
+          : "次に：「確認番号をLINEに送る」を押してください。LINEで届いた6桁を読み、このブラウザへ戻って入力します。", "next-action");
+      }
+      if (check.state === "sent" && check.pinAvailable && !fromLink && !oneCard)
+        text("LINEに確認番号を送りました。届いている6桁を入力してください。", "success");
+      if (sameBrowser && check.pinAvailable && !fromLink && !state.lineAutoPin && lineChatUrl()) {
+        const open = link(state.lineOneButton ? "LINEの確認メッセージを見る" : "LINEで確認番号を見る", lineChatUrl());
+        open.classList.add("secondary");
+        open.referrerPolicy = "no-referrer";
+        root.append(open);
+        if (!state.lineOneButton) root.append(lineReturnHelp("番号を読んだら"));
+      }
+      if (check.code && sameBrowser)
+        text(state.lineAutoPin && check.code === "LINE_RESULT_UNKNOWN" && !check.pinAvailable
+          ? "LINEへの送信結果を確認できません。現在使える確認番号がありません。新しい番号を送って確認してください。"
+          : messages[check.code] ?? "送信を完了できませんでした。状態を確認して再送してください。", "small");
+      if (sameBrowser && !fromLink && !oneCard) {
+        const send = button("確認番号をLINEに送る", async () => {
+          try { await api("line/test", {}); }
+          catch (error) { await refresh(true); throw error; }
           await refresh(true);
-        }),
+        }, check.pinAvailable || pending ? "secondary" : "");
+        lockLineSend(send,check,pending);
+        if (state.lineAutoPin && (check.pinAvailable || pending)) {
+          const resend = node("details", undefined, "setup-recovery");
+          resend.append(node("summary", "確認番号が届かない・期限が切れたとき"),
+            node("p", "すでに届いている番号は、送り直さずに入力できます。再送すると前の番号は使えなくなります。", "small"), send);
+          root.append(resend);
+        } else root.append(send);
+      }
+      if (sameBrowser && !pending && (check.pinAvailable || (!state.lineAutoPin && !state.lineButtonConfirm))) {
+        const label = node("label", "確認番号");
+        label.htmlFor = "pin";
+        const pin = node("input");
+        pin.id = "pin";
+        pin.type = "text";
+        pin.inputMode = "numeric";
+        pin.autocomplete = "one-time-code";
+        pin.maxLength = 6;
+        if (fromLink) pin.value = lineConfirmLink.pin;
+        root.append(label, pin, button(fromLink ? "通知先を確認して次へ" : "確認する", async () => {
+          if (fromLink && !liveLineConfirmLink(check)) {
+            discardLineConfirmLink(); await refresh(true); throw {code:"PIN_INVALID"};
+          }
+          const entered = pin.value;
+          try { await mutate("line/verify", {pin:entered}); }
+          catch (error) { await refresh(true); throw error; }
+        }));
+      }
+      text(lineDailyLimitHint(check) ?? (oneCard
+        ? "カードと番号は5分間有効です。送信は自動送信を含め1分に1回、1日3回まで。"
+        : "番号は5分間有効です。送信は自動送信を含め1分に1回、1日3回まで。送信受付と実際の到着は別です。"), "small");
+      if (lineDailyLimitHint(check)) text("番号は5分間有効です。送信受付と実際の到着は別です。", "small");
+      if (oneCard) {
+        // One-button mode: resend the same card type; a PIN-only send stays as a fallback.
+        const primary = !check.pinAvailable && !pending;
+        const resend = button("確認カードをもう一度送る", async () => {
+          forgetPinOnlyAttempt();
+          try { await api("line/button", {}); rememberPinOnly(null); }
+          catch (error) { await refresh(true); throw error; }
+          await refresh(true);
+        }, primary ? "" : "secondary");
+        lockLineSend(resend, check, pending);
+        const send = button("確認番号をLINEに送る", async () => {
+          // Mark the attempt first: a timeout or lost response after dispatch
+          // must not leave the guidance on the card this send invalidated.
+          startPinOnly(check.pinAvailable ? check.expiresAt : 0);
+          try { rememberPinOnly((await api("line/test", {})).expiresAt); }
+          catch (error) { await refresh(true); throw error; }
+          await refresh(true);
+        }, "secondary");
+        lockLineSend(send, check, pending);
+        const again = node("details", undefined, "setup-recovery");
+        again.append(node("summary", "カードが届かない・期限が切れたとき"),
+          node("p", "送り直すと、前のカードと番号は使えなくなります。新しい送信は回数に数えます。", "small"),
+          node("p", "「確認番号をLINEに送る」は、カードではなく番号だけを送ります。届いた6桁を下に入力して「確認する」を押してください。", "small"));
+        if (primary) root.append(resend);
+        else again.append(resend);
+        again.append(send);
+        root.append(again);
+      }
+      if (sameBrowser && state.lineButtonConfirm && !fromLink && !state.lineOneButton) {
+        const switchButton=button("ボタン確認へ切り替えて送る",async()=>{
+          try {await api("line/button",{});}catch(error){await refresh(true);throw error;}
+          await refresh(true);
+        },"secondary");lockLineSend(switchButton,check,pending);
+        const change=node("details",undefined,"setup-recovery");
+        change.append(node("summary","番号を入力せずボタンで確認する"),
+          node("p","切り替えると前の番号は無効になり、新しい送信を利用枠と回数に数えます。","small"),switchButton);
+        root.append(change);
+      }
+      }
+      if (!linkMissing) {
+      const retry = node("details", undefined, "setup-recovery");
+      retry.append(
+        node("summary", "通知先のLINEを変更する・登録コードを送り直す"),
+        node("p", "下のボタンで新しい登録コードを表示し、通知先にしたいLINEから送ってください。その後、この元ブラウザへ戻って通知先を確認します。", "small"),
+        lockLineSend(button("コードを再発行", code, "secondary"),check),
       );
-      if (pinSent)
-        text("LINEに確認番号を送りました。届いた6桁を入力してください。", "success");
-      const label = node("label", "確認番号");
-      label.htmlFor = "pin";
-      const pin = node("input");
-      pin.id = "pin";
-      pin.type = "text";
-      pin.inputMode = "numeric";
-      pin.autocomplete = "one-time-code";
-      pin.maxLength = 6;
-      root.append(
-        label,
-        pin,
-        button("確認する", () => mutate("line/verify", { pin: pin.value })),
-      );
-      text("番号は5分間有効です。テスト送信は1分に1回、1日3回まで。", "small");
-    } else
-      root.append(
-        button("LINEの検出状態を更新", () => refresh(true), "secondary"),
-      );
+      root.append(retry);
+      }
+    }
   } else if (["line_verified", "ready"].includes(state.state)) {
     heading("準備ができました");
-    text(state.store.title + " ／ LINE確認済み");
+    text("次に：下の要点を読み、チェックを入れて「利用を開始する」を押してください。", "next-action");
+    text(state.store.title);
+    text("通知先：LINE（確認できました）", "small");
     text(
-      "直近60日の未返信口コミから、最初は5件まで返信案を作ります。通知は原則1日1回。ここで利用開始しても、返信はまだ公開されません。",
+      "対象は直近60日以内で、まだ返信していない口コミです。返信案は1日1回、最大5件ずつLINEに届きます。登録直後には届かず、参加店で分け合う送信枠や処理の状況で遅れる日があります。",
     );
     for (const [name, value] of [
-      ["月間AI下書き数", state.limits.drafts],
-      ["共有LINEの月間送信上限", state.limits.pushes],
+      ["AIの下書き（1か月）", state.limits.drafts],
+      ["LINE通知の枠（参加店で共有・1か月）", state.limits.pushes],
     ]) {
       const p = node("div", undefined, "capacity");
       p.append(node("span", name), node("strong", value + "件"));
       root.append(p);
     }
-    const label = node("label");
+    const points = node("ul", undefined, "consent-points");
+    for (const point of [
+      "無料です。同意なしに有料になることはありません。",
+      "ここで利用を開始しても、まだ何も公開されません。Googleに公開されるのは、LINEで「送信」を押した返信だけです。",
+      "アカウント画面からいつでも停止・切断できます。公開済みの返信は残ります。",
+      "AIの文章は間違えることがあります。送る前に読んでください。",
+    ])
+      points.append(node("li", point));
+    root.append(points);
+    const label = node("label", undefined, "terms-check");
     const checkbox = node("input");
     checkbox.type = "checkbox";
     checkbox.id = "terms";
+    const termsError = node("p", undefined, "field-error");
+    termsError.id = "terms-error";
+    termsError.setAttribute("role", "alert");
+    termsError.hidden = true;
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        termsError.hidden = true;
+        checkbox.removeAttribute("aria-invalid");
+        checkbox.removeAttribute("aria-describedby");
+      }
+    });
     label.append(checkbox, document.createTextNode("利用条件を確認しました"));
     const policies = node("p", undefined, "small");
     for (const [title, path] of [
@@ -415,8 +878,13 @@ async function render() {
     root.append(
       policies,
       label,
+      termsError,
       button("利用を開始する", async () => {
         if (!checkbox.checked) {
+          termsError.textContent = "利用条件を確認し、チェックを入れてください。";
+          termsError.hidden = false;
+          checkbox.setAttribute("aria-invalid", "true");
+          checkbox.setAttribute("aria-describedby", termsError.id);
           checkbox.focus();
           return;
         }
@@ -431,9 +899,13 @@ async function render() {
     text(state.store.title);
     text(
       state.lastCheckedAt
-        ? "最終確認: " + new Date(state.lastCheckedAt).toLocaleString("ja-JP")
-        : "接続は完了しました。次回の定期確認を待っています。",
+        ? "最後に口コミの確認を試みた日時：" + new Date(state.lastCheckedAt).toLocaleString("ja-JP")
+        : state.state === "active"
+          ? "登録が完了しました。"
+          : "停止中のため、口コミの確認は行っていません。",
     );
+    if (state.state === "active")
+      text("返信案ができたときだけ、原則1日1回、朝9時以降にまとめてLINEへお知らせします。登録直後には届きません。利用枠や処理の状況で、届かない日もあります。", "small");
     text(
       state.processingCount
         ? "処理待ちの口コミ: " +
@@ -448,12 +920,19 @@ async function render() {
             : state.replyResults?.length
               ? "各口コミの処理結果を下に表示しています。"
               : state.lastCheckedAt
-                ? "未返信の新しい口コミはありません。接続成功と返信投稿の完了は別です。"
-                : "まだ口コミを取得していません。架空の口コミは投稿しません。",
+                ? "未返信の新しい口コミはありません。"
+                : state.state === "active"
+                  ? "まだ口コミを確認していません。確認は自動で行います。"
+                  : "まだ口コミを確認していません。",
       "small",
     );
     if (state.lastError)
       text("一部の処理を保留中です。接続や利用枠を確認してください。");
+    const help = node("p", undefined, "small");
+    const faqLink = node("a", "困ったときは（返信案が届かない・Googleに出ない）");
+    faqLink.href = "/self/help/faq#replies";
+    help.append(faqLink);
+    root.append(help);
     if (state.state === "active")
       root.append(
         button("利用を停止", () => dangerConfirm("pause"), "secondary"),
@@ -505,11 +984,19 @@ async function render() {
       "small",
     );
   if (state.state !== "anonymous") {
+    const ordinarySetup = !state.pilotMode && state.registrationAllowed &&
+      ["google_connected", "location_selected", "line_pending", "line_verified", "ready"].includes(state.state);
+    const accountActions = ordinarySetup ? node("details", undefined, "setup-recovery") : root;
+    if (ordinarySetup) {
+      accountActions.id = "setup-account-actions";
+      accountActions.append(node("summary", "接続の切断・ログアウト"));
+      root.append(accountActions);
+    }
     if (!["active", "paused"].includes(state.state))
-      root.append(
+      accountActions.append(
         button("接続を切断", () => dangerConfirm("disconnect"), "danger"),
       );
-    root.append(
+    accountActions.append(
       button(
         "ログアウト",
         async () => {
@@ -521,11 +1008,42 @@ async function render() {
       ),
     );
   }
-  root.append(button("状態を更新", () => refresh(true), "secondary"));
+  if (["location_selected", "line_pending"].includes(state.state) && !state.lineDetected) {
+    text("LINEから登録コードをまだ受け取っていません。", "small");
+    text("通常は自動で検出します。画面が変わらないときだけ、状態を更新してください。", "small");
+  }
+  if (state.state !== "anonymous")
+    root.append(button("状態を更新", () => refresh(true), "secondary"));
   if (state.notice) showError({ code: state.notice });
 }
+armLineConfirmLinkExpiry();
 refresh().catch(showError);
+function resumeLine() {
+  if (!busy && state?.state === "line_pending") refresh().catch(showError);
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") resumeLine();
+});
+window.addEventListener("pagehide", () => discardLineConfirmLink());
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) {discardLineConfirmLink(); rendered = ""; resumeLine();}
+});
+window.addEventListener("hashchange", () => {
+  if (!location.hash) return;
+  returningFromLine = true;
+  discardLineConfirmLink();
+  lineConfirmLink = takeLineConfirmLink();
+  lineConfirmLinkFresh = Boolean(lineConfirmLink);
+  armLineConfirmLinkExpiry();
+  rendered = "";
+  refresh(true).catch(showError);
+});
 setInterval(() => {
-  if (!busy && state?.state === "line_pending" && !state.lineDetected)
+  if (!busy && state?.state === "line_pending" &&
+      (!state.lineDetected || state.lineCheck?.sendLimit || ["awaiting", "preparing", "sending"].includes(state.lineCheck?.state) ||
+       (state.lineButtonConfirm && state.lineCheck?.method === "button") ||
+       ((state.lineAutoPin || state.lineButtonConfirm) && state.lineCheck?.pinAvailable &&
+        Number.isFinite(state.lineCheck.expiresAt) && state.lineCheck.expiresAt <= Date.now())))
+    // Recheck availability at expiry; the server remains the PIN authority.
     refresh().catch(showError);
 }, 3000);

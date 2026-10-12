@@ -27,9 +27,9 @@
 //   WHATSAPP_PHONE_NUMBER_ID — WhatsApp 送信元電話番号 ID
 //   WHATSAPP_VERIFY_TOKEN    — WhatsApp Webhook 検証トークン（任意文字列）
 
-import { createSelfContext } from './self-service/config.mjs';
+import { createSelfContext, readSelfConfig } from './self-service/config.mjs';
 import { handleSelfRequest } from './self-service/router.mjs';
-import { runSelfScheduled } from './self-service/scheduled.mjs';
+import { runSelfScheduled, legacyCronDue } from './self-service/scheduled.mjs';
 
 import { generateReply, PROVIDERS } from '../src/reply-engine.mjs';
 import { verifyLineCredentials } from '../src/line-notify.mjs';
@@ -41,6 +41,9 @@ export default {
     const url = new URL(request.url);
     const { method } = request;
     const path = url.pathname;
+
+    const moved = workersDevRedirect(request, env);
+    if (moved) return moved;
 
     try {
       const selfResponse = await handleSelfRequest(request, env, createSelfContext(env));
@@ -129,9 +132,16 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    try { await runSelfScheduled(createSelfContext(env)); }
+    // The cron fires every 5 minutes; the self-service picks one job from the
+    // scheduled minute. Legacy KV/GBP/Gmail work stays hourly (the :00 run),
+    // so KV list calls do not grow. A call without scheduledTime (tests, manual
+    // invocation) keeps the old run-everything behaviour.
+    const hasSlot = Number.isFinite(controller?.scheduledTime);
+    const scheduledTime = hasSlot ? controller.scheduledTime : Date.now();
+    try { await runSelfScheduled(createSelfContext(env), { scheduledTime }); }
     catch { console.error("[cron/self] SELF_PROCESSING_FAILED"); }
-    const utcHour = new Date().getUTCHours();
+    if (hasSlot && !legacyCronDue(scheduledTime)) return;
+    const utcHour = new Date(scheduledTime).getUTCHours();
 
     // ① daily-digest バッファを吐き出す
     const pendingList = await env.STORES.list({ prefix: 'pending:' });
@@ -169,6 +179,37 @@ export default {
     }
   },
 };
+
+// ── workers.dev → 独自ドメインへの転送 ───────────────────────────────────────
+// 公開アドレスを SELF_PUBLIC_ORIGIN（独自ドメイン）へ移したあとも、配った紙・note・
+// 送信済み LINE の workers.dev リンクを生かすため、人が開く画面の GET/HEAD だけを転送する。
+// Webhook・API・OAuth 戻り先・Search Console 確認ファイル・/health・/admin は転送しない
+// （サーバー間の呼び出しと、workers.dev の所有権確認を壊さないため）。
+// SELF_PUBLIC_ORIGIN が workers.dev 自身・未設定・不正なら何もしない。
+const REDIRECT_PAGE_PATHS = new Set(['/', '/start', '/account']);
+export function workersDevRedirect(request, env) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return null;
+  const url = new URL(request.url);
+  if (!url.hostname.endsWith('.workers.dev')) return null;
+  const origin = readSelfConfig(env ?? {}).origin;
+  if (!origin) return null;
+  const target = new URL(origin);
+  if (target.hostname === url.hostname || target.hostname.endsWith('.workers.dev')) return null;
+  const path = url.pathname;
+  const page = REDIRECT_PAGE_PATHS.has(path) ||
+    path.startsWith('/account/replies/') ||
+    path.startsWith('/self/');
+  if (!page) return null;
+  return new Response(null, {
+    status: 301,
+    headers: {
+      Location: origin + path + url.search,
+      // 戻すときに古い転送がブラウザに残り続けないよう、キャッシュは1時間まで。
+      'Cache-Control': 'public, max-age=3600',
+      'Referrer-Policy': 'no-referrer',
+    },
+  });
+}
 
 // ── GBP ポーリング（Cron から呼び出し） ─────────────────────────────────────
 
@@ -418,8 +459,15 @@ async function handleLineBotWebhook(request, env, ctx) {
 
 async function processLineEvents(events, env) {
   const { parseLinkCode } = await import('../src/line-link.mjs');
+  // waitUntil's allowance belongs to the request, not each event. Preserve
+  // ordered consumption/actions, then supervise bounded confirmation delivery together.
+  const lineCheckSignal = AbortSignal.timeout(20000), lineChecks = [];
   for (const event of events) {
     try {
+      if (env.SELF_DB && event.type === 'postback' && /^meo-confirm:/.test(event.postback?.data ?? '')) {
+        const {receiveLineButton}=await import('./self-service/line-button-confirm.mjs');
+        await receiveLineButton(createSelfContext(env),event);continue;
+      }
       if (env.SELF_DB && event.type === 'postback' && /^(approve|skip|edit):ss_/.test(event.postback?.data ?? '')) {
         const {handleSelfPostback}=await import('./self-service/approvals.mjs');
         const selfCtx=createSelfContext(env);
@@ -429,7 +477,18 @@ async function processLineEvents(events, env) {
       }
       if (env.SELF_DB && event.type === 'message' && /^MEOS-/.test(event.message?.text?.trim().toUpperCase() ?? '')) {
         const {consumeLineCode}=await import('./self-service/line-link.mjs');
-        await consumeLineCode(createSelfContext(env),event);continue;
+        const selfCtx={...createSelfContext(env),lineCheckSignal};
+        try {
+          await consumeLineCode(selfCtx,event,{deferCheck:task=>lineChecks.push(task)});
+        } catch (err) {
+          if (err?.code !== 'LINE_CODE_INVALID') throw err;
+          console.error('[line-message] error:', err.message);
+          try {
+            const {sendSelfCodeNotice}=await import('./self-service/feedback.mjs');
+            await sendSelfCodeNotice(selfCtx,event);
+          } catch {} // Never replace an unavailable reply with a paid push.
+        }
+        continue;
       }
       // Text sent after 「書き直す」 becomes the new draft; other chat falls through.
       if (env.SELF_DB && event.type === 'message' && event.message?.type === 'text') {
@@ -450,6 +509,14 @@ async function processLineEvents(events, env) {
       console.error(`[line-${event.type}] error:`, err.message);
     }
   }
+  let nextCheck=0;
+  await Promise.allSettled(Array.from({length:Math.min(3,lineChecks.length)},async()=>{
+    while(nextCheck<lineChecks.length){
+      const task=lineChecks[nextCheck++];
+      try { await task(); }
+      catch(err) { console.error('[line-check] error:',err.message); }
+    }
+  }));
 }
 
 async function handleLinePostback(event, env) {
@@ -859,7 +926,11 @@ async function handleGbpOAuthCallback(url, env) {
   const state = url.searchParams.get('state');
   const error = url.searchParams.get('error');
 
-  if (error) return htmlPage('GBP 認証エラー', `<p>Google 認証が拒否されました: <code>${error}</code></p>`, 400);
+  // error はリンクを作った人が自由に書ける。決まった形の値だけを表示し、それ以外は伏せる。
+  if (error) {
+    const shown = /^[a-z_]{1,64}$/.test(error) ? error : 'unknown_error';
+    return htmlPage('GBP 認証エラー', `<p>Google 認証が拒否されました: <code>${escapeHtml(shown)}</code></p>`, 400);
+  }
   if (!code || !state) return htmlPage('GBP 認証エラー', '<p>code または state が不正です</p>', 400);
 
   const storeId = await env.STORES.get(`gbp-oauth-state:${state}`);
@@ -886,13 +957,14 @@ async function handleGbpOAuthCallback(url, env) {
 
   const tokenData = await tokenRes.json();
   if (!tokenRes.ok || !tokenData.refresh_token) {
-    const msg = tokenData.error_description ?? tokenData.error ?? JSON.stringify(tokenData).slice(0, 200);
-    return htmlPage('トークン取得エラー', `<p>${msg}</p><p>refresh_token が返されませんでした。Google Cloud Console で「offline アクセス」が有効か確認してください。</p>`, 500);
+    // 応答の JSON をそのまま出すと access_token などが画面に残るので、エラーの文言と HTTP 状態だけを出す
+    const msg = tokenData.error_description ?? tokenData.error ?? `HTTP ${tokenRes.status}`;
+    return htmlPage('トークン取得エラー', `<p>${escapeHtml(msg)}</p><p>refresh_token が返されませんでした。Google Cloud Console で「offline アクセス」が有効か確認してください。</p>`, 500);
   }
 
   // refresh_token を store に保存
   const storeRaw = await env.STORES.get(`store:${storeId}`);
-  if (!storeRaw) return htmlPage('エラー', `<p>store:${storeId} が見つかりません</p>`, 404);
+  if (!storeRaw) return htmlPage('エラー', `<p>store:${escapeHtml(storeId)} が見つかりません</p>`, 404);
   const store = JSON.parse(storeRaw);
   store.gbpRefreshToken = tokenData.refresh_token;
 
@@ -914,11 +986,11 @@ async function handleGbpOAuthCallback(url, env) {
 
   const next = picked
     ? `<p>店舗「${escapeHtml(picked.title ?? picked.gbpLocationId)}」を自動で選びました。新しい口コミは1時間ごとに確認します。</p>`
-    : `<p>次のステップ: <code>GET /admin/stores/${storeId}/gbp/locations</code> で店舗を確認し、<code>PUT /admin/stores/${storeId}/gbp/location</code> で選択してください。</p>`;
+    : `<p>次のステップ: <code>GET /admin/stores/${escapeHtml(storeId)}/gbp/locations</code> で店舗を確認し、<code>PUT /admin/stores/${escapeHtml(storeId)}/gbp/location</code> で選択してください。</p>`;
   return htmlPage(
     'GBP 認証完了',
     `<p>✅ Google ビジネスプロフィールの認証が完了しました。</p>
-     <p>店舗 ID: <code>${storeId}</code></p>
+     <p>店舗 ID: <code>${escapeHtml(storeId)}</code></p>
      ${next}`,
     200,
   );
@@ -1069,12 +1141,23 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// 店主のログイン Cookie と同じドメインで返す HTML。bodyHtml に入れる可変の値は
+// 呼び出し側で escapeHtml() を通すこと。万一漏れてもスクリプトは CSP で動かない。
+const HTML_PAGE_HEADERS = Object.freeze({
+  'Content-Type': 'text/html; charset=utf-8',
+  'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+  'X-Content-Type-Options': 'nosniff',
+  'Cache-Control': 'no-store',
+  'Referrer-Policy': 'no-referrer',
+});
+
 function htmlPage(title, bodyHtml, status = 200) {
+  const safeTitle = escapeHtml(title);
   return new Response(
-    `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>${title}</title>
+    `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>${safeTitle}</title>
      <style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;line-height:1.6}</style>
-     </head><body><h1>${title}</h1>${bodyHtml}</body></html>`,
-    { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+     </head><body><h1>${safeTitle}</h1>${bodyHtml}</body></html>`,
+    { status, headers: HTML_PAGE_HEADERS },
   );
 }
 

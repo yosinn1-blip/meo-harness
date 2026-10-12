@@ -146,7 +146,7 @@ button,
   text-decoration: none;
   min-height: 48px;
 }
-button.secondary {
+button.secondary, .button.secondary {
   background: #e9f1f5;
   color: var(--blue);
 }
@@ -220,7 +220,8 @@ summary {
   cursor: pointer;
   color: var(--ink);
   font-weight: 600;
-  padding: 7px 0;
+  padding: 10px 0;
+  min-height: 44px;
 }
 footer {
   border-top: 1px solid var(--line);
@@ -229,6 +230,10 @@ footer {
   flex-wrap: wrap;
   gap: 25px;
   font-size: 13px;
+}
+footer a {
+  padding: 10px 0;
+  min-height: 44px;
 }
 .help-layout {
   max-width: 850px;
@@ -243,8 +248,9 @@ footer {
 }
 .help-heading p, .field-hint { color: var(--muted); }
 .help-topics { display: flex; gap: 12px 25px; flex-wrap: wrap; margin: 28px 0 40px; }
+.help-topics a { display: inline-block; padding: 10px 0; min-height: 44px; }
 .faq-group { margin: 40px 0; scroll-margin-top: 24px; }
-.faq-group details { border-bottom: 1px solid var(--line); padding: 12px 0; }
+.faq-group details { border-bottom: 1px solid var(--line); padding: 12px 0; scroll-margin-top: 16px; }
 .faq-group details[open] { padding-bottom: 18px; }
 .faq-group details p { margin: 12px 0; max-width: 44em; }
 .faq-group summary { font-size: 16px; }
@@ -305,9 +311,16 @@ footer {
 .policy nav a {
   display: inline-block;
   margin: 8px 20px 8px 0;
+  padding: 10px 0;
+  min-height: 44px;
 }
 a {
   color: var(--blue);
+}
+.field-error {
+  color: var(--danger);
+  font-weight: 600;
+  margin: 8px 0 0;
 }
 #error {
   color: var(--danger);
@@ -317,7 +330,10 @@ a {
   overflow-wrap: anywhere;
 }
 #challenge {
-  margin-top: 20px;
+  margin: 0 0 12px;
+}
+#challenge-status {
+  margin: 0 0 12px;
 }
 .location {
   padding: 15px 0;
@@ -334,8 +350,13 @@ a {
 .capacity {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
   border-bottom: 1px solid var(--line);
   padding: 10px 0;
+}
+.capacity strong {
+  flex: none;
+  white-space: nowrap;
 }
 .qr {
   width: 144px;
@@ -365,14 +386,12 @@ a {
     margin: 0 0 12px;
     line-height: 1.5;
   }
-  .intro h1 br {
-    display: none;
-  }
   .intro > p:not(.assurance) {
-    font-size: 13px;
-  }
-  .assurance {
     display: none;
+  }
+  .intro > p.assurance {
+    font-size: 13px;
+    margin: 0 0 8px;
   }
   #steps {
     display: flex;
@@ -381,7 +400,12 @@ a {
     justify-content: space-between;
   }
   #steps li {
-    font-size: 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    text-align: center;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+    min-width: 0;
     flex-direction: column;
     gap: 5px;
     min-height: 0;
@@ -391,8 +415,9 @@ a {
   display: none;
 }
 #steps li::before {
-    width: 25px;
-    height: 25px;
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
   }
   #current-step {
     padding: 24px 20px;
@@ -408,14 +433,51 @@ a {
   .notes {
     margin-top: 24px;
   }
-  button {
+  button, .button {
     width: 100%;
     margin-right: 0;
   }
   .trial {
-    font-size: 10px;
+    font-size: 12px;
   }
   .brand {
     font-size: 21px;
   }
+}
+
+/* Keep the next setup action distinct from secondary recovery controls. */
+.next-action {
+  border-left: 3px solid var(--blue);
+  padding: 10px 0 10px 16px;
+  font-weight: 600;
+  line-height: 1.8;
+}
+.setup-recovery {
+  border-top: 1px solid var(--line);
+  margin-top: 28px;
+  padding-top: 12px;
+}
+/* Consent: plain-language points and a large tap target for the terms check. */
+.consent-points {
+  padding-left: 20px;
+  margin: 12px 0 4px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.consent-points li {
+  margin: 4px 0;
+}
+.terms-check {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.terms-check input[type="checkbox"] {
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  flex: none;
 }

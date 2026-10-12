@@ -60,12 +60,21 @@ export function readSelfConfig(env) {
       env.SELF_LINE_FRIEND_URL &&
       env.SELF_TERMS_VERSION,
   );
+  const autoLineButton = !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true" &&
+    env.SELF_LINE_BUTTON_CONFIRM_ENABLED === "true" && env.SELF_LINE_AUTO_BUTTON_ENABLED === "true";
+  const lineButtonConfirm = !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true" &&
+    env.SELF_LINE_BUTTON_CONFIRM_ENABLED === "true" && (autoLineButton || env.SELF_LINE_AUTO_PIN_ENABLED !== "true");
   return {
     origin,
     configured,
     registrationEnabled,
     pilotMode,
     pilotEnabled,
+    // The new explicit auto-button opt-in wins; otherwise preserve legacy flags.
+    autoLinePin: !autoLineButton && !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true" && env.SELF_LINE_AUTO_PIN_ENABLED === "true",
+    autoLineButton,
+    lineButtonConfirm,
+    lineOneButton: lineButtonConfirm && env.SELF_LINE_ONE_BUTTON_ENABLED === "true",
     processingEnabled: !pilotMode && operational && env.SELF_PROCESSING_ENABLED === "true",
     limits,
   };

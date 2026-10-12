@@ -24,7 +24,7 @@
     invalidate();
     if (!form.reportValidity()) return;
     // A whitespace-only report does not contain actionable details.
-    for (const id of ['report-steps', 'description']) {
+    for (const id of ['description']) {
       const field = document.getElementById(id);
       if (!field.value.trim()) {
         field.setCustomValidity('内容を入力してください。');
@@ -38,9 +38,9 @@
       `相談内容：${selectedLabel('category')}`,
       `お店の名前：${value('store') || '未記入'}`,
       `発生日時：${value('occurred').replace('T', ' ') || '不明'}（送信者の現地時刻）`,
-      `画面：${selectedLabel('screen')}`,
+      `画面：${value('screen') ? selectedLabel('screen') : '未記入'}`,
       `端末・ブラウザ：${value('device') || '不明'}`, '',
-      '【行った操作】', value('report-steps'), '',
+      '【行った操作】', value('report-steps') || '未記入', '',
       '【起きたこと・相談したいこと】', value('description'), '',
       '※パスワード・認証コード・お客様の個人情報を含めていないことを確認しました。',
       '※画像が必要な場合は、個人情報等を隠してメール側で添付します。',
@@ -52,7 +52,7 @@
     preview.hidden = false;
     document.querySelector('#preview-title').focus();
   });
-  for (const id of ['report-steps', 'description']) {
+  for (const id of ['description']) {
     document.getElementById(id).addEventListener('input', event => event.target.setCustomValidity(''));
   }
   document.querySelector('#copy-report').addEventListener('click', async () => {

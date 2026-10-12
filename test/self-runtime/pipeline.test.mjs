@@ -7,6 +7,7 @@ import {
   seedStore,
 } from "../support/self-runtime.mjs";
 import { seedGoogleCredential } from "../support/self-google.mjs";
+import { meterD1 } from "../support/d1-meter.mjs";
 import { createSelfContext } from "../../worker/self-service/config.mjs";
 import {
   pollSelfStore,
@@ -154,6 +155,11 @@ test("one draft unit creates one reply and retains the rest; LINE timeout retrie
     () => sendSelfDigest(ctx, store.id),
     (e) => e.code === "LINE_RESULT_UNKNOWN",
   );
+  // An unknown result waits 30 min before the same digest is retried.
+  const unknownAt = ctx.now();
+  await sendSelfDigest(ctx, store.id);
+  assert.equal(calls.push.length, 1, "no retry while the wait lasts");
+  ctx.now = () => unknownAt + 30 * 60000;
   await sendSelfDigest(ctx, store.id);
   assert.equal(calls.push.length, 2);
   assert.deepEqual(calls.push[0], calls.push[1]);
@@ -247,17 +253,16 @@ test("LINE accepted then notification DB update fails: retry sends no second pus
   await processSelfJobs(ctx);
   const db = ctx.db;
   let failed = false;
-  ctx.db = {
-    prepare: db.prepare.bind(db),
-    batch(statements) {
-      if (calls.push.length && !failed) {
-        failed = true;
-        throw new Error("fixture DB failure");
-      }
-      return db.batch(statements);
-    },
-  };
+  // The reservation commit (with the acceptance time) is saved; only the
+  // notification row's own update fails.
+  ctx.db = meterD1(db, (sqls) => {
+    if (failed || !calls.push.length || !sqls.some((q) => q.includes("state='accepted'")))
+      return false;
+    return (failed = true);
+  }).db;
   await assert.rejects(() => sendSelfDigest(ctx, store.id));
+  const failedAt = ctx.now();
+  ctx.now = () => failedAt + 30 * 60000;
   await sendSelfDigest(ctx, store.id);
   assert.equal(calls.push.length, 1);
   assert.equal(
@@ -273,7 +278,40 @@ test("LINE accepted then notification DB update fails: retry sends no second pus
     1,
   );
 });
-test("more than 50 reviews resumes a bounded scan; old and already answered reviews are excluded", async (t) => {
+test("LINE accepted then the reservation commit fails: the retry reuses the same retry key", async (t) => {
+  const { ctx, store, calls } = await setup(t);
+  await pollSelfStore(ctx, store.id);
+  await processSelfJobs(ctx);
+  const db = ctx.db;
+  let failed = false;
+  ctx.db = meterD1(db, (sqls) => {
+    if (failed || !calls.push.length || !sqls.some((q) => q.includes("UPDATE usage_reservations")))
+      return false;
+    return (failed = true);
+  }).db;
+  await assert.rejects(() => sendSelfDigest(ctx, store.id));
+  assert.equal(failed, true);
+  const failedAt = ctx.now();
+  ctx.now = () => failedAt + 30 * 60000;
+  await sendSelfDigest(ctx, store.id);
+  // LINE answers a repeated retry key of an accepted push with 409 and does
+  // not deliver it again.
+  assert.equal(calls.push.length, 2);
+  assert.equal(calls.push[0].key, calls.push[1].key);
+  assert.equal(
+    (await db.prepare("SELECT state FROM notification_jobs").first()).state,
+    "accepted",
+  );
+  assert.equal(
+    (
+      await db
+        .prepare("SELECT used FROM usage_budgets WHERE kind='push'")
+        .first()
+    ).used,
+    1,
+  );
+});
+test("more than one page of reviews resumes a bounded one-page-per-run scan; old and already answered reviews are excluded", async (t) => {
   const { ctx, store } = await setup(t, { drafts: "0" });
   const fallback = ctx.fetchImpl;
   const pages = [];
@@ -282,10 +320,12 @@ test("more than 50 reviews resumes a bounded scan; old and already answered revi
     if (u.hostname !== "mybusiness.googleapis.com")
       return fallback(input, init);
     const p = Number(u.searchParams.get("pageToken") ?? 0);
+    const size = Number(u.searchParams.get("pageSize"));
+    assert.equal(size, 20, "one poll reads one 20-review page");
     pages.push(p);
     return Response.json({
-      reviews: Array.from({ length: 50 }, (_, i) => ({
-        reviewId: "r" + (p * 50 + i),
+      reviews: Array.from({ length: size }, (_, i) => ({
+        reviewId: "r" + (p * size + i),
         comment: "架空口コミ",
         starRating: "FIVE",
         createTime:
@@ -297,16 +337,22 @@ test("more than 50 reviews resumes a bounded scan; old and already answered revi
     });
   };
   await pollSelfStore(ctx, store.id);
-  assert.deepEqual(pages, [0, 1]);
+  assert.deepEqual(pages, [0]);
   assert.equal(
     (await ctx.db.prepare("SELECT count(*) n FROM review_jobs").first()).n,
-    98,
+    18,
   );
+  await pollSelfStore(ctx, store.id);
   await pollSelfStore(ctx, store.id);
   assert.deepEqual(pages, [0, 1, 2]);
   assert.equal(
     (await ctx.db.prepare("SELECT count(*) n FROM review_jobs").first()).n,
-    148,
+    58,
+  );
+  assert.equal(
+    (await ctx.db.prepare("SELECT page_token FROM poll_cursors").first()).page_token,
+    null,
+    "the scan completes on its last page",
   );
 });
 test("budget-held ungenerated review is rehydrated after retention and processed when quota returns", async (t) => {

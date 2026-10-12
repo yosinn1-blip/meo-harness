@@ -3,6 +3,10 @@ main = "worker/index.mjs"
 compatibility_date = "2024-11-01"
 workers_dev = true
 preview_urls = false
+# 公開アドレス（独自ドメイン）。workers.dev は gbp-notify の転送・送信済みLINE・配布物の旧リンクのため残す。
+routes = [
+  { pattern = "meo.star-pocket.com", custom_domain = true },
+]
 
 # ── KV: 店舗設定 ──────────────────────────────────────────────────────────────
 # ローカル dev では wrangler が自動でエミュレート。
@@ -35,9 +39,14 @@ migrations_dir = "migrations"
 VERSION = "0.1.0"
 SELF_REGISTRATION_ENABLED = "true"
 SELF_PROCESSING_ENABLED = "true"
-SELF_PUBLIC_ORIGIN = "https://meo-harness.yosinn1.workers.dev"
+SELF_LINE_BUTTON_CONFIRM_ENABLED = "true"
+SELF_LINE_AUTO_BUTTON_ENABLED = "true"
+SELF_LINE_ONE_BUTTON_ENABLED = "true"
+SELF_LINE_AUTO_PIN_ENABLED = "false"
+SELF_PUBLIC_ORIGIN = "https://meo.star-pocket.com"
 TURNSTILE_SITE_KEY = "0x4AAAAAAFE6uTVTTIAlwcWr"
-# 本人限定の接続確認。許可対象はSecret SELF_PILOT_OWNER_SHA256。一般受付/処理は閉鎖。
+# Secret SELF_PILOT_OWNER_SHA256 を置くと、受付と処理を止めた本人限定モードになる。本番では置かない。
+# SELF_LINE_CHECK_DAILY_BYPASS_ENABLED は運営者本人だけの一時設定なので、ここには書かない。ダッシュボードで管理し、deploy の --keep-vars で残す。
 SELF_MAX_ACTIVE_STORES = "10"
 SELF_MONTHLY_DRAFT_LIMIT = "30"
 SELF_MONTHLY_PUSH_LIMIT = "150"
@@ -47,12 +56,19 @@ SELF_TERMS_VERSION = "2026-09-27"
 # Google Search Console所有権確認（公開ファイル名。消すとブランド検証が外れる）
 SELF_GOOGLE_SITE_VERIFICATION_FILE = "google3031925227c81399.html"
 
-# ── Cron Trigger: タイムゾーン対応ダイジェスト（毎時実行・各店舗の現地9:00に送信）──
-# utcOffset=+9(JST/KST)→UTC 0:00, utcOffset=+1(BST)→UTC 8:00, utcOffset=-5(EST)→UTC 14:00
+# ── Cron Trigger: 5分ごとに1つの仕事（UTCの分で役割を決める）。旧処理は毎時00分だけ ──
+# :00 片付け＋旧処理 / :05 :35 取得 / :10 :20 :30 :40 :50 下書き / :15 :45 :55 通知 / :25 照合
+# 旧処理のタイムゾーン対応ダイジェスト（各店舗の現地9:00）は毎時00分の回で今までどおり判定する。
+# 戻すときはコードとこの行を必ず一緒に戻す（古いコードのまま */5 だと旧処理が1時間に12回走る）。
 [triggers]
-crons = ["0 * * * *"]
+crons = ["*/5 * * * *"]
 
 [[rules]]
 type = "Text"
 globs = ["**/*.html", "**/*.css", "**/*.txt", "**/*.md"]
+fallthrough = true
+
+[[rules]]
+type = "Data"
+globs = ["**/*.webp"]
 fallthrough = true

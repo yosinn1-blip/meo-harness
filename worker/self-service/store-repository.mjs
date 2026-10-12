@@ -1,5 +1,27 @@
 import { SelfError, ensure } from "./errors.mjs";
 import { sha256 } from "./crypto.mjs";
+import { LIMITS } from "./contracts.mjs";
+// A never-started registration (no accepted terms) past its window: created
+// more than LIMITS.unstartedMs ago, or more than LIMITS.unstartedPreLineMs ago
+// without a verified LINE. It no longer holds an intake slot and purgeExpired
+// deletes it. created_at, not updated_at, so a LINE code or a reconnect cannot
+// keep a slot. Binds, in order: registrationCutoffs(now).
+export function abandonedRegistrationSql(alias) {
+  return `(${alias}.terms_version IS NULL AND (${alias}.created_at<? OR (${alias}.line_verified_at IS NULL AND ${alias}.created_at<?)))`;
+}
+export function registrationCutoffs(now) {
+  return [now - LIMITS.unstartedMs, now - LIMITS.unstartedPreLineMs];
+}
+const LIVE_SELF_CLAIMS = `FROM location_claims c JOIN stores s ON s.id=c.store_id WHERE c.mode='self' AND NOT ${abandonedRegistrationSql("s")}`;
+// Self registrations that hold an intake slot: started ones, plus unstarted
+// ones still inside their window.
+export async function countLiveSelfClaims(ctx) {
+  const row = await ctx.db
+    .prepare(`SELECT count(*) n ${LIVE_SELF_CLAIMS}`)
+    .bind(...registrationCutoffs(ctx.now()))
+    .first();
+  return row.n;
+}
 export function mapStore(row) {
   if (!row) return null;
   return {
@@ -44,9 +66,12 @@ export function validateLocation({ accountId, locationId }) {
     "INVALID_LOCATION",
   );
 }
+// capacity: when given, a new registration is created only while fewer than
+// that many self registrations hold an intake slot, checked in the same batch.
 export async function claimLocation(
   ctx,
   { sub, accountId, locationId, title },
+  { capacity } = {},
 ) {
   validateLocation({ accountId, locationId });
   ensure(
@@ -63,10 +88,21 @@ export async function claimLocation(
     );
     return existing;
   }
+  if (capacity !== undefined)
+    ensure(Number.isSafeInteger(capacity) && capacity >= 0, "CAPACITY_UNAVAILABLE", 409);
   const id = crypto.randomUUID();
   const n = ctx.now();
+  const guard =
+    capacity === undefined
+      ? []
+      : [
+          ctx.db
+            .prepare(`INSERT INTO mutation_guards SELECT (SELECT count(*) ${LIVE_SELF_CLAIMS})<?`)
+            .bind(...registrationCutoffs(n), capacity),
+        ];
   try {
     await ctx.db.batch([
+      ...guard,
       ctx.db
         .prepare(
           "INSERT INTO users(sub,created_at) VALUES (?,?) ON CONFLICT DO NOTHING",
@@ -90,11 +126,14 @@ export async function claimLocation(
       ctx.db
         .prepare("INSERT INTO location_claims VALUES (?,?,'self')")
         .bind(locationId, id),
+      ...(guard.length ? [ctx.db.prepare("DELETE FROM mutation_guards")] : []),
     ]);
   } catch (error) {
     const again = await findOwnedStore(ctx, sub);
     if (again?.locationId === locationId && again.state !== "disconnected")
       return again;
+    if (guard.length && /CHECK constraint failed: ok\s*=\s*1/.test(error.message))
+      throw new SelfError("CAPACITY_UNAVAILABLE", 409);
     if (/UNIQUE|constraint/i.test(error.message))
       throw new SelfError("LOCATION_UNAVAILABLE", 409);
     throw error;

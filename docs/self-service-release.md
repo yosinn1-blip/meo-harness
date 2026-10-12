@@ -26,6 +26,8 @@ node scripts/check-self-release.mjs --evidence output/self-service/release-evide
 git diff --check
 ```
 
+本番へ反映した直後に GET /api/self/status を開き、lineButtonConfirm・lineAutoButton・lineOneButton が true、lineAutoPin が false であることを確かめる。dry-run と本番モジュールの byte 比較では vars の違いを検出できない。
+
 Nodeテスト、実D1エンジンの隔離テスト、Chrome for Testingの専用プロファイルを分けて検証します。E2EはGoogle/LINE/AIをすべて架空プロバイダへ差し替え、予想外の外部通信0件を要求します。架空口コミへのローカルPUT成功は実Googleへの投稿成功を意味しません。公開bundleにはfixture route、架空challenge、test用鍵、認証迂回を含めないことを確認します。
 
 証跡は実行日時、対象commit、コマンド、件数、fail/skip、元終了コードだけを残し、秘密や本文は残しません。下記gateは明示的なbooleanのtrueだけを採用します。ファイルなし、false、不明はblocked（終了コード1）が正しい結果です。チェッカーは読取専用で、deployやSecret変更は行いません。
@@ -44,12 +46,12 @@ Nodeテスト、実D1エンジンの隔離テスト、Chrome for Testingの専�
 ## 2. 外部設定は対象を示して別途承認する
 
 - Google: GBP API利用承認とは別に、OAuthアプリの表示名・検証済みドメイン・プライバシーURL・公開状態を確認。通常ログインは`openid`のみ、GBP接続は`openid`と`https://www.googleapis.com/auth/business.manage`。redirectは対象Workerと同じオリジンの`/api/self/google/callback`。
-- Cloudflare: 対象アカウントとWorkerを確認してからD1を作成し、`migrations/0001_self_service.sql`を適用。`SELF_DB`にbinding。実Secretsと`.dev.vars`をビルド/テストへ流さない。
+- Cloudflare: 対象アカウントとWorkerを確認してからD1を作成し、`migrations/0001_self_service.sql`を適用。既存D1へは足りないmigrationだけを適用する（2026-10-06の5分ごと処理は `0006_notification_last_attempt.sql` が先に必要。`npm run deploy` の predeploy が列の有無を読み取りで確かめ、無ければ止まる）。`SELF_DB`にbinding。実Secretsと`.dev.vars`をビルド/テストへ流さない。
 - 鍵: `SELF_TOKEN_KEY_V1`と`SELF_RATE_KEY`をSecret管理で生成・追加する。暗号鍵を勝手に回転/消去しない。復元時には同じ版の鍵を必要とする。
 - 既存店: KV店舗一覧のGBP locationをD1の`location_claims`に先に予約し、重複・件数を確認。既存経路の新規作成にも同じ予約が適用される。既存稼働店を自己登録へ自動移行しない。
   - 既存店のGBP店舗選択を変更する場合は、新しいlocationの予約を追加してからKVを保存する。旧locationの予約は自動解放しない。KV保存失敗・並行変更・処理中の旧口コミを考慮し、誤って自己登録側へ引き渡さないため。旧形式の予約も引き続き認識する。
   - 過去に選択したlocationを別の運用へ渡す必要がある場合は、現在のKV設定、旧pending/reply処理、通知・投稿中の処理がないことを確認し、対象を示して承認を得た運営作業で予約を解放する。自己登録の切断では既存店の予約を削除しない。
-- LINE: 対象チャネルのWebhook URL/署名、残量、他用途の消費を確認。`SELF_LEGACY_PUSH_RESERVE`で既存分を確保。実残量不明や不足で送信は保留する。API受付と端末への到達は分けて確認。
+- LINE: 対象チャネルのWebhook URL/署名、残量、他用途の消費を確認。`SELF_LEGACY_PUSH_RESERVE`で既存分を確保。実残量不明や不足で送信は保留する。API受付と端末への到達は分けて確認。返信案の通知（再送を含む）の送信を始めるのは JST 9:00〜20:59 だけ（利用者向けの「朝9時以降」の範囲内）。夜に登録した店の最初の LINE は翌朝になる。
 - 表示/個人情報: 運営者、問い合わせ先、正式な条件版、認証/口コミ/下書きの保存目的を明示。ログにOAuth code、Cookie、登録code/PIN、本文、provider responseを出さない。D1のバックアップ/Time Travelと運用バックアップの保持期間はlive設定で確定する。
 - 許可された店だけ実接続する。実返信の送信は、対象口コミと返信本文について本人が明示承認したときだけ。動作確認のために架空口コミを投稿しない。
 

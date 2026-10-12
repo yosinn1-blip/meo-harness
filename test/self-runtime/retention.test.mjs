@@ -65,8 +65,10 @@ test('LINE relinking cannot make an activated store eligible for abandoned-signu
   assert.deepEqual(row,{state:'line_pending',terms_version:'fixture-v1'});
   assert.ok(await db.prepare("SELECT owner_sub FROM google_credentials WHERE owner_sub='alice'").first());
 });
-for (const change of ['activate','refresh']) {
-  test(`retention rechecks abandonment atomically when ${change} wins the cleanup race`, async t => {
+// Activation inside the race keeps the store. Reissuing a LINE code does not:
+// the unstarted window counts from created_at, so it cannot be extended.
+for (const [change, retained] of [['activate', true], ['refresh', false]]) {
+  test(`retention rechecks abandonment atomically when ${change} races the cleanup`, async t => {
     const {db}=await withD1(t);await applySchema(db);
     let clock=now;
     const ctx=createSelfContext(fixtureEnv(db),{now:()=>clock,fetchImpl:async u=>
@@ -85,9 +87,9 @@ for (const change of ['activate','refresh']) {
     }};
     await purgeExpired({...ctx,db:raceDb});
     assert.equal(raced,true);
-    assert.ok(await db.prepare('SELECT id FROM stores WHERE id=?').bind(store.id).first());
-    assert.ok(await db.prepare("SELECT owner_sub FROM google_credentials WHERE owner_sub='alice'").first());
-    assert.ok(await db.prepare('SELECT store_id FROM location_claims WHERE store_id=?').bind(store.id).first());
+    assert.equal(Boolean(await db.prepare('SELECT id FROM stores WHERE id=?').bind(store.id).first()),retained);
+    assert.equal(Boolean(await db.prepare("SELECT owner_sub FROM google_credentials WHERE owner_sub='alice'").first()),retained);
+    assert.equal(Boolean(await db.prepare('SELECT store_id FROM location_claims WHERE store_id=?').bind(store.id).first()),retained);
   });
 }
 async function seedUsage(db, {id,period,kind='push',state='committed',created=now-150*day,scope='channel'}) {
@@ -167,4 +169,15 @@ test('unfinished user identities expire without removing live sessions, OAuth or
   clock+=2*day;
   await purgeExpired(ctx);
   assert.deepEqual((await db.prepare('SELECT sub FROM users ORDER BY sub').all()).results.map(r=>r.sub),['alice']);
+});
+
+test('LINE-05: edit expiry notices retain rows for two hours, then purge', async t => {
+  const {db} = await withD1(t); await applySchema(db);
+  const ctx = createSelfContext(fixtureEnv(db), {now: () => now});
+  await seedStore(ctx);
+  for (const [id, expires] of [['live', now+1], ['recent', now-1], ['inside', now-2*3600000+1], ['boundary', now-2*3600000], ['old', now-2*3600000-1]])
+    await db.prepare('INSERT INTO line_edits VALUES (?,?,?)').bind(id,'ss_r',expires).run();
+  await purgeExpired(ctx);
+  const rows = (await db.prepare('SELECT line_user_id FROM line_edits ORDER BY line_user_id').all()).results;
+  assert.deepEqual(rows.map(x => x.line_user_id), ['inside','live','recent']);
 });

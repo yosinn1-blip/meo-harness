@@ -157,7 +157,8 @@ export async function selectLocation(ctx, actor, ids) {
     "REGISTRATION_CLOSED",
     503,
   );
-  if (readSelfConfig(ctx.env).pilotMode && !(await findOwnedStore(ctx, actor.sub))) {
+  const { pilotMode, limits } = readSelfConfig(ctx.env);
+  if (pilotMode && !(await findOwnedStore(ctx, actor.sub))) {
     const count = await ctx.db.prepare("SELECT count(*) n FROM location_claims WHERE mode='self'").first();
     ensure(count.n < 1, "CAPACITY_UNAVAILABLE", 409);
   }
@@ -170,10 +171,16 @@ export async function selectLocation(ctx, actor, ids) {
     .first();
   ensure(candidate, "LOCATION_NOT_ACCESSIBLE", 403);
   const actual = await verifyLocationAccess(ctx, actor, ids);
-  return claimLocation(ctx, {
-    sub: actor.sub,
-    accountId: ids.accountId,
-    locationId: ids.locationId,
-    title: actual.title,
-  });
+  // The start-time check alone lets parallel or held sessions overfill the
+  // intake; recheck it atomically when the registration is created.
+  return claimLocation(
+    ctx,
+    {
+      sub: actor.sub,
+      accountId: ids.accountId,
+      locationId: ids.locationId,
+      title: actual.title,
+    },
+    pilotMode ? {} : { capacity: limits.maxActiveStores },
+  );
 }

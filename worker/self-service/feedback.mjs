@@ -6,27 +6,28 @@ import { dateKeys } from "./contracts.mjs";
 import { budgetStatement, reserveUsage, settleUsage } from "./budget.mjs";
 import { buildReviewBubble } from "../../src/line-flex.mjs";
 const messages = {
-  POSTED: "Googleへの投稿を確認しました。",
+  POSTED: "返信がGoogleに投稿されたことを確認しました。Googleマップに表示されるまで少し時間がかかることがあります。",
   SKIPPED: "この返信案をスキップしました。Googleには投稿していません。",
   REVIEW_CONFLICT:
     "口コミが更新されたか、すでに別の返信があります。上書きせず停止しました。Google上の内容を確認してください。",
   REAPPROVAL_REQUIRED:
     "まだ投稿されていないことを確認しました。同じ返信案を投稿する場合は、内容を確認してもう一度「送信」を押してください。",
   POST_RESULT_UNKNOWN:
-    "Googleへの送信結果はまだ未確認です。自動で再投稿せず、照合します。アカウント画面で結果を確認してください。",
+    "投稿できたかどうか、まだ確認できていません。二重投稿を防ぐため、自動では送り直しません。しばらくしてから、下のリンクの「最近の返信結果」で確認してください。",
   POST_CHECK_FAILED:
-    "処理結果を確認できませんでした。投稿成功とは限りません。アカウント画面を確認してください。",
+    "処理の結果を確認できませんでした。投稿されたとは限りません。下のリンクの「最近の返信結果」で確認してください。",
   POST_PENDING:
-    "投稿または照合を処理中です。連打せず、アカウント画面で結果を確認してください。",
+    "いま処理中です。ボタンは押し直さずにお待ちください。結果は下のリンクの「最近の返信結果」でも確認できます。",
   ALREADY_HANDLED:
-    "この通知は処理済みです。投稿・スキップなどの結果はアカウント画面で確認してください。",
+    "この返信案は、すでに送信の処理が始まっているか、終わっています。結果は下のリンクの「最近の返信結果」で確認してください。",
   REPLY_EXPIRED:
     "返信案の有効期限が切れています。このボタンからは投稿しません。",
   REPLY_STALE: "停止・再接続前の古い通知です。このボタンからは投稿しません。",
   STORE_INACTIVE: "現在は停止中または再接続が必要なため投稿していません。",
   PROCESSING_CLOSED: "処理を一時停止しているため投稿していません。",
   EDIT_WAITING:
-    "編集した返信文を、このトークにそのまま送ってください（10分以内・1200字まで）。やめる場合は「やめる」と送ってください。",
+    "直した返信文を、このトークに1通で送ってください（30分以内・1200字まで）。\n送っただけでは投稿されません。次に届く確認カードで「送信」を押すと投稿されます。\nやめる場合は「やめる」と送ってください。",
+  EDIT_EXPIRED: "「編集する」を押してから30分が過ぎたため、いま送った文は返信案にしていません。\n直す場合は、カードの「編集する」をもう一度押してから、同じ文を送り直してください（いま送った文は長押しでコピーできます）。",
   EDIT_CANCELLED:
     "編集をやめました。元の返信案のカードから「送信」できます。返信しない場合は何も押さなくて大丈夫です。",
   EDIT_INVALID:
@@ -36,7 +37,7 @@ const messages = {
   DRAFT_EDITED: "この内容でGoogleに返信しますか？ よければ「送信」を押してください。",
 };
 // Conversational steps: the account URL would only add noise.
-const noAccountLink = new Set(["EDIT_WAITING", "EDIT_CANCELLED", "EDIT_INVALID", "DRAFT_EDITED"]);
+const noAccountLink = new Set(["EDIT_WAITING", "EDIT_EXPIRED", "EDIT_CANCELLED", "EDIT_INVALID", "DRAFT_EDITED"]);
 export async function sendSelfFeedback(ctx, event, result) {
   if (readSelfConfig(ctx.env).pilotMode) return;
   const message = messages[result?.code];
@@ -68,6 +69,38 @@ export async function sendSelfFeedback(ctx, event, result) {
     })
   )
     return;
+  return replyOnce(ctx, event, () => feedbackMessages(ctx, result, id, message, store), {
+    bucket: "feedback:" + (await sha256(event.source.userId)),
+    limit: 10,
+    windowMs: 60000,
+  });
+}
+
+export async function sendSelfCodeNotice(ctx, event) {
+  if (
+    readSelfConfig(ctx.env).pilotMode ||
+    event.source?.type !== "user" ||
+    typeof event.source.userId !== "string" || !event.source.userId ||
+    typeof event.replyToken !== "string" || !event.replyToken || event.replyToken.length > 4096 ||
+    !ctx.env.LINE_CHANNEL_ACCESS_TOKEN ||
+    typeof event.webhookEventId !== "string" || !event.webhookEventId ||
+    event.deliveryContext?.isRedelivery === true
+  ) return;
+  const linked = await ctx.db.prepare(
+    "SELECT 1 FROM stores WHERE (state='line_pending' AND pending_line_user_id=?) OR (state IN ('line_verified','ready','active','paused') AND line_user_id=?) LIMIT 1",
+  ).bind(event.source.userId, event.source.userId).first();
+  if (linked) return;
+  return replyOnce(ctx, event, () => [{
+    type: "text",
+    text: "このコードでは登録を進められませんでした（15分の期限が過ぎたか、古いコードです）。\n登録を始めた画面（Safari・Chromeなど）に戻ってください。「再発行」のボタンがあれば押して、新しいコードをもう一度このトークに送ってください。",
+  }], {
+    bucket: "code-notice:" + (await sha256(event.source.userId)),
+    limit: 3,
+    windowMs: 600000,
+  });
+}
+
+async function replyOnce(ctx, event, buildMessages, rate) {
   if (typeof event.webhookEventId !== "string") return;
   const key = "line-reply:" + (await sha256(event.webhookEventId));
   const existing = await ctx.db
@@ -76,11 +109,7 @@ export async function sendSelfFeedback(ctx, event, result) {
     .first();
   if (existing) return;
   try {
-    await consumeRate(ctx, {
-      bucket: "feedback:" + (await sha256(event.source.userId)),
-      limit: 10,
-      windowMs: 60000,
-    });
+    await consumeRate(ctx, rate);
     const period = dateKeys(ctx.now()).month;
     await budgetStatement(ctx, {
       scope: "channel",
@@ -110,7 +139,7 @@ export async function sendSelfFeedback(ctx, event, result) {
         },
         body: JSON.stringify({
           replyToken: event.replyToken,
-          messages: feedbackMessages(ctx, result, id, message, store),
+          messages: buildMessages(),
         }),
         signal: AbortSignal.timeout(10000),
       },
@@ -135,6 +164,11 @@ function feedbackMessages(ctx, result, id, message, store) {
   const text = noAccountLink.has(result.code)
     ? message
     : message + "\n" + ctx.env.SELF_PUBLIC_ORIGIN + "/account";
+  if (result.code === "EDIT_WAITING" && typeof result.currentDraft === "string" && result.currentDraft)
+    return [
+      { type: "text", text: result.currentDraft },
+      { type: "text", text: "↑ いまの返信案です。長押しでコピーして直せます。\n" + text },
+    ];
   if (result.code !== "DRAFT_EDITED" || !result.preview) return [{ type: "text", text }];
   const { review, draft, rev } = result.preview;
   return [
@@ -148,6 +182,7 @@ function feedbackMessages(ctx, result, id, message, store) {
         bizName: String(store?.title ?? "").slice(0, 80),
         rev,
         editable: true,
+        variant: "preview",
       }),
     },
   ];

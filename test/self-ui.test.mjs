@@ -115,7 +115,7 @@ test("all published help links resolve to same-origin human-readable guidance", 
 });
 
 test('support pages work without login or database and never echo query secrets', async () => {
-  for (const path of ['/self/help/faq', '/self/help/report']) {
+  for (const path of ['/self/help/faq', '/self/help/report', '/self/help/quickstart']) {
     const response = await worker.fetch(new Request('https://meo.test' + path + '?code=private-code-fixture&token=private-token-fixture'), {
       SELF_DB: { prepare() { throw new Error('Support must not use the DB'); } },
     }, {});
@@ -158,7 +158,7 @@ test('top page explains the service without auth or DB and leads to registration
   assert.equal(response.headers.get('Set-Cookie'), null);
   assert.match(response.headers.get('Content-Security-Policy'), /script-src 'none'/);
   const html = await response.text();
-  for (const text of ['「送信」', '編集する', '先着10店舗', '月30件', '運営者', 'meo.harness@gmail.com', 'href="/start"', 'href="/self/privacy"', 'href="/self/terms"'])
+  for (const text of ['「送信」', '編集する', '先着10店舗', '月30件', 'Yoshiki Apps', 'meo.harness@gmail.com', 'href="/start"', 'href="/self/privacy"', 'href="/self/terms"'])
     assert.ok(html.includes(text), text);
   assert.doesNotMatch(html, /スキップ|承認して送信|<script/);
   const css = await worker.fetch(new Request('https://meo.test/self/assets/home.css'), {}, {});
@@ -185,19 +185,20 @@ test('home exposes pricing, support and existing-account entry without setup-tim
     assert.ok(html.includes(fragment), fragment);
   const hero = html.match(/<section[^>]*class="hero"[\s\S]*?<\/section>/)?.[0];
   assert.ok(hero, 'hero section exists');
-  assert.match(hero, /href="\/account"/);
+  const header = html.match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0] ?? '';
+  assert.match(header, /href="\/account"/);
   assert.doesNotMatch(html, /5分で完了|5分で始められ|待ち時間もありません/);
 });
 
-test('home FAQ uses native disclosures for accounts, manual sending and daily notification timing', async () => {
+test('home FAQ uses native disclosures for manual sending and daily notification timing', async () => {
   const response = await worker.fetch(new Request('https://meo.test/'), {}, {});
   const html = await response.text();
   const faq = html.match(/<section[^>]*id="faq"[^>]*>[\s\S]*?<\/section>/)?.[0];
   assert.ok(faq, 'FAQ section exists');
   const disclosures = [...faq.matchAll(/<details(?:\s[^>]*)?>[\s\S]*?<\/details>/g)].map(match => match[0]);
-  assert.equal(disclosures.length, 3);
+  assert.equal(disclosures.length, 5);
   for (const disclosure of disclosures) assert.match(disclosure, /<summary(?:\s[^>]*)?>[\s\S]+?<\/summary>/);
-  assert.match(faq, /Google(?:アカウント|ビジネスプロフィール)/);
+  assert.match(html, /Google(?:アカウント|ビジネスプロフィール)/);
   assert.match(faq, /LINE/);
   assert.match(faq, /送信/);
   assert.match(faq, /1日1回/);
@@ -215,4 +216,101 @@ test('home supplies a keyboard skip destination and labels the illustrative revi
   assert.ok(figure, 'illustrative review belongs to a figure');
   assert.match(figure, /<figcaption(?:\s[^>]*)?>[\s\S]*画面はイメージです[\s\S]*<\/figcaption>/);
   assert.match(figure, /架空/);
+});
+
+async function homeHtml() {
+  const response = await worker.fetch(new Request('https://meo.test/'), {}, {});
+  return response.text();
+}
+const homeSection = (html, id) => html.match(new RegExp(`<section[^>]*id="${id}"[^>]*>[\\s\\S]*?<\\/section>`))?.[0] ?? '';
+
+test('home steps quote the printed button names of the production one-button LINE flow', async () => {
+  const html = await homeHtml();
+  const steps = homeSection(html, 'steps');
+  assert.ok(steps, 'steps section exists');
+  for (const name of ['初めての方：Googleでお店を接続', 'この店舗を使う', 'LINEを開いてコードを送る', '確認して登録画面へ進む', '通知先を確認して次へ', '利用を開始する'])
+    assert.ok(steps.includes(`「${name}」`), name);
+  assert.doesNotMatch(steps, /「Googleで接続」|6桁|LINEで本人確認/);
+  assert.ok(homeSection(html, 'pricing').includes('返信案は登録直後には届きません。'));
+  assert.equal(html.split('登録直後には届きません').length - 1, 1, 'stated once');
+  assert.match(steps, /スマホ1台/);
+  assert.doesNotMatch(html, /次の朝9時|昼以降|\d+分ほど|\d+分で/);
+});
+
+test('home illustrative image is labeled as an example, not a live LINE control', async () => {
+  const html = await homeHtml();
+  const figure = html.match(/<figure\b[^>]*>[\s\S]*?<\/figure>/)?.[0] ?? '';
+  assert.match(figure, /<img\b[^>]*src="\/self\/assets\/hero-phone\.webp"/);
+  assert.match(figure, /alt="[^"]*(?:口コミ|返信案)[^"]*"/);
+  assert.match(figure, /画面はイメージです/);
+  assert.match(figure, /架空/);
+  assert.doesNotMatch(figure, /<button\b|<form\b|class="(?:card-actions|chip-send|chip-edit)"/);
+  assert.match(html, /「送信」を押した返信だけがGoogleに公開/);
+  assert.match(html, /「編集する」/);
+});
+
+test('home explains editing, AI data handling, limits, eligibility and the unofficial status', async () => {
+  const html = await homeHtml();
+  assert.ok(!html.includes('LINEで送るだけ'));
+  assert.ok(html.includes('直した内容の確認カードが届くので、よければ「送信」を押します。'));
+  assert.ok(html.includes('Groq'));
+  assert.ok(html.includes('href="/self/privacy"'));
+  assert.ok(homeSection(html, 'pricing').includes('直近60日'));
+  assert.ok(html.includes('公式サービスではありません'));
+  assert.ok(html.includes('個人店向け'));
+  assert.ok(homeSection(html, 'steps').includes('オーナーや本部が管理しているお店は'));
+  const faq = homeSection(html, 'faq');
+  assert.ok(html.includes('コードを送ったLINEに届きます'));
+  assert.ok(homeSection(html, 'pricing').includes('試験運用'));
+  const summaries = [...faq.matchAll(/<summary>([\s\S]*?)<\/summary>/g)].map(match => match[1]);
+  assert.equal(summaries.length, 5);
+  assert.equal(new Set(summaries).size, summaries.length, 'FAQ questions are distinct');
+});
+
+test('draft scope and the five-per-notification batch are never described as a first-time draft cap', async () => {
+  // Production: every unreplied review from the last 60 days is drafted, one per
+  // scheduled run up to the monthly cap; only a LINE notification holds at most 5.
+  const { readFileSync } = await import('node:fs');
+  const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
+  assert.match(read('worker/self-service/scheduled.mjs'), /processSelfJobs\(ctx, \{ limit: 1 \}\)/);
+  assert.match(read('worker/self-service/notifications.mjs'), /ORDER BY j\.created_at,r\.id LIMIT 5"/);
+  assert.match(read('worker/self-service/contracts.mjs'), /firstPollDays: 60,/);
+  const quickstart = await (await worker.fetch(new Request('https://meo.test/self/help/quickstart'), {}, {})).text();
+  const pages = {
+    registration: read('worker/self-service/ui/app.js.txt'),
+    homePricingDetails: homeSection(await homeHtml(), 'pricing'),
+    quickstart,
+    quickstartDoc: read('docs/quickstart.md'),
+  };
+  for (const [name, text] of Object.entries(pages)) {
+    assert.ok(text.includes('対象は直近60日以内で、まだ返信していない口コミです'), name + ': draft scope');
+    assert.match(text, /最大5件ずつLINE(?:に|へ)届きます/, name + ': notification batch');
+    assert.ok(text.includes('登録直後には届'), name + ': not right after registration');
+    assert.doesNotMatch(text, /(?:初回|最初)[^。<]*5件|5件まで/, name + ': no first-time five-draft cap');
+  }
+});
+
+test('quickstart is a mobile HTML guide that uses the printed button names', async () => {
+  const response = await worker.fetch(new Request('https://meo.test/self/help/quickstart'), {}, {});
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8');
+  const html = await response.text();
+  assert.match(html, /<meta name="viewport" content="width=device-width,initial-scale=1" \/>/);
+  assert.doesNotMatch(html, /<script/);
+  for (const text of ['初めての方：Googleでお店を接続', 'この店舗を使う', 'LINEを開いてコードを送る', '利用を開始する', '「送信」', '「編集する」', '確認して登録画面へ進む', '通知先を確認して次へ'])
+    assert.ok(html.includes(text), text);
+  for (const text of ['1 このLINEで確認', 'ローカル', '未公開', 'D1', 'スキップ', '承認して送信'])
+    assert.ok(!html.includes(text), text);
+  const aiSetup = await worker.fetch(new Request('https://meo.test/self/help/ai-setup'), {}, {});
+  assert.equal(aiSetup.headers.get('Content-Type'), 'text/plain; charset=utf-8');
+});
+
+test('FAQ keeps stable, unique anchors for linked questions', async () => {
+  const html = await (await worker.fetch(new Request('https://meo.test/self/help/faq'), {}, {})).text();
+  const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(m => m[1]);
+  assert.equal(new Set(ids).size, ids.length, 'ids are unique');
+  for (const id of ['replies', 'not-posted', 'expired'])
+    assert.equal(ids.filter(x => x === id).length, 1, id);
+  const summaries = [...html.matchAll(/<summary>([\s\S]*?)<\/summary>/g)].map(m => m[1]).join('\n');
+  assert.doesNotMatch(summaries, /承認したのに|承認ボタンの期限/);
 });

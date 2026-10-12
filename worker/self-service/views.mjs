@@ -1,10 +1,13 @@
-import quickstart from "../../docs/quickstart.md";
 import aiSetup from "../../docs/ai-setup.md";
 import selfHosting from "../../docs/self-hosting.md";
 import qrcode from "qrcode-generator";
 import start from "./ui/start.html";
 import home from "./ui/home.html";
 import homeCss from "./ui/home.css";
+import heroPhone from "./ui/images/hero-phone.webp";
+import flowReview from "./ui/images/flow-review.webp";
+import flowDraft from "./ui/images/flow-draft.webp";
+import flowSend from "./ui/images/flow-send.webp";
 import account from "./ui/account.html";
 import privacy from "./ui/privacy.html";
 import terms from "./ui/terms.html";
@@ -12,16 +15,24 @@ import script from "./ui/app.js.txt";
 import css from "./ui/style.css";
 import faq from "./ui/faq.html";
 import report from "./ui/report.html";
+import quickstartPage from "./ui/quickstart.html";
 import reportScript from "./ui/report.js.txt";
+const homeImages = Object.freeze({
+  "/self/assets/hero-phone.webp": heroPhone,
+  "/self/assets/flow-review.webp": flowReview,
+  "/self/assets/flow-draft.webp": flowDraft,
+  "/self/assets/flow-send.webp": flowSend,
+});
+
 export function serveSelfPage(request, ctx = { env: {} }) {
   const path = new URL(request.url).pathname;
   let body, type;
   const helps = {
-    "/self/help/quickstart": quickstart,
     "/self/help/ai-setup": aiSetup,
     "/self/help/self-hosting": selfHosting,
   };
-  const supportPage = path === '/self/help/faq' || path === '/self/help/report';
+  const supportPages = { '/self/help/faq': faq, '/self/help/report': report, '/self/help/quickstart': quickstartPage };
+  const supportPage = Object.hasOwn(supportPages, path);
   const verificationFile = ctx.env.SELF_GOOGLE_SITE_VERIFICATION_FILE;
   if (
     typeof verificationFile === 'string' &&
@@ -36,8 +47,11 @@ export function serveSelfPage(request, ctx = { env: {} }) {
   } else if (path === "/self/assets/home.css") {
     body = homeCss;
     type = "text/css; charset=utf-8";
+  } else if (Object.hasOwn(homeImages, path)) {
+    body = homeImages[path];
+    type = "image/webp";
   } else if (supportPage) {
-    body = path === '/self/help/faq' ? faq : report;
+    body = supportPages[path];
     type = 'text/html; charset=utf-8';
   } else if (path === '/self/assets/report.js') {
     body = reportScript;

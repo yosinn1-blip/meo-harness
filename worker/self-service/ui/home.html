@@ -8,224 +8,139 @@
     <link rel="stylesheet" href="/self/assets/home.css" />
   </head>
   <body>
-    <a class="skip-link" href="#main-content">本文へ移動</a>
-    <header class="top">
-      <div class="wrap top-inner">
-        <a class="logo" href="/">MEO <span>Harness</span></a>
-        <nav class="top-nav" aria-label="ページ内">
-          <a href="#features">できること</a>
-          <a href="#steps">はじめ方</a>
-          <a href="#pricing">料金・FAQ</a>
-          <a href="#operator">運営者</a>
-          <a class="top-cta" href="/start">無料ではじめる</a>
-        </nav>
-      </div>
-    </header>
+      <a class="skip-link" href="#main-content">本文へ移動</a>
+      <header class="site-header">
+        <div class="page-width header-inner">
+          <a class="brand" href="#main-content" aria-label="MEO Harness ホーム">
+            <strong>MEO</strong> Harness
+          </a>
+          <nav class="header-nav" aria-label="メインナビゲーション">
+            <a class="nav-section" href="#features">使い方</a>
+            <a class="nav-section" href="#pricing">料金・FAQ</a>
+            <a class="account-link" href="/account">アカウント</a>
+            <a class="button header-start" href="/start">無料ではじめる</a>
+          </nav>
+        </div>
+      </header>
 
-    <main id="main-content" tabindex="-1">
-      <section class="hero">
-        <div class="wrap hero-inner">
-          <div class="hero-copy">
-            <p class="eyebrow">Googleの口コミ返信アシスタント</p>
-            <h1><span class="nw">Googleの口コミ返信を、</span><br /><span class="nw">LINEで<span class="key">「送信」</span>を</span><span class="nw">押すだけに。</span></h1>
-            <p class="lead">Googleの口コミへの返信案を、いつものLINEへ。内容を確認して「送信」を押すとGoogleに公開されます。直したいときは「編集する」から書き換えられます。</p>
-            <div class="hero-actions">
-              <a class="btn btn-primary" href="/start">無料ではじめる<small>GoogleとLINEを接続</small></a>
-              <a class="btn btn-ghost" href="#pricing">料金・よくある質問</a>
+      <main id="main-content" tabindex="-1">
+        <section class="hero" aria-labelledby="hero-title">
+          <div class="page-width hero-inner">
+            <div class="hero-copy">
+              <h1 id="hero-title"><span>口コミ返信を、</span><span>いつものLINEで。</span></h1>
+              <p class="hero-description">AIが下書き。あなたが確認して送信。</p>
+              <div class="hero-actions">
+                <a class="button hero-start" href="/start">無料ではじめる</a>
+                <p class="trial-caption">無料・先着10店舗 <span>／ 1店舗あたり月30件まで</span></p>
+                <a class="text-link before-link" href="#steps">はじめる前に</a>
+              </div>
             </div>
-            <p class="hero-account"><a href="/account">ご利用中の方はアカウントへ</a></p>
-            <ul class="badges" aria-label="特長">
-              <li>無料・先着10店舗</li>
-              <li>1店舗あたり月30件まで</li>
-              <li>送信するまで公開されません</li>
-            </ul>
+            <figure class="hero-preview">
+              <img src="/self/assets/hero-phone.webp" width="1122" height="1402" alt="口コミとAIの返信案を確認するLINE画面の例" fetchpriority="high" />
+              <figcaption>画面はイメージです。店舗・口コミは架空の例です。</figcaption>
+            </figure>
           </div>
+        </section>
 
-          <figure class="hero-preview">
-            <div class="phone">
-              <div class="phone-bar">MEO Harness</div>
-              <div class="chat">
-                <div class="card">
-                  <div class="card-head">Yoshiki Cafe</div>
-                  <div class="card-body">
-                    <p class="stars" aria-label="星5つ">★★★★★ <span>山田様</span></p>
-                    <p class="review">ランチのパスタがとても美味しかったです。店員さんの対応も丁寧でした。</p>
-                    <p class="label">AIの返信案</p>
-                    <p class="draft">山田様、ご来店と温かいお言葉をありがとうございます。パスタを気に入っていただけて嬉しいです。またのお越しをお待ちしております。</p>
-                  </div>
-                  <div class="card-actions">
-                    <span class="chip chip-send">送信</span>
-                    <span class="chip chip-edit">編集する</span>
-                  </div>
+        <section class="flow-section" id="features" aria-labelledby="features-title">
+          <div class="page-width">
+            <h2 class="visually-hidden" id="features-title">LINEで返信する、3つの流れ</h2>
+            <ol class="flow-list">
+              <li>
+                <div class="flow-art"><img src="/self/assets/flow-review.webp" width="1536" height="1024" alt="星評価のついた口コミ" loading="lazy" /></div>
+                <h3><span class="step-number">1</span>口コミが届く</h3>
+              </li>
+              <li>
+                <div class="flow-art"><img src="/self/assets/flow-draft.webp" width="1536" height="1024" alt="AIが用意した返信の下書き" loading="lazy" /></div>
+                <h3><span class="step-number">2</span>AIが下書き</h3>
+              </li>
+              <li>
+                <div class="flow-art"><img src="/self/assets/flow-send.webp" width="1536" height="1024" alt="確認した返信を送るボタン" loading="lazy" /></div>
+                <h3><span class="step-number">3</span>確認して送信</h3>
+              </li>
+            </ol>
+            <p class="flow-assurance"><span>確認してから公開。</span> <span>送信するまで、Googleには載りません。</span></p>
+            <a class="text-link flow-more" href="#pricing">料金・FAQを見る</a>
+          </div>
+        </section>
+
+        <div class="details-width">
+          <section class="compact-section getting-started" id="steps" aria-labelledby="steps-title">
+            <h2 id="steps-title">はじめる前に</h2>
+            <p class="section-intro">お店の管理権限があるGoogleアカウントと、<br class="desktop-break" />LINEの入ったスマホをご用意ください。</p>
+            <details>
+              <summary>登録の詳しい手順</summary>
+              <div class="disclosure-content">
+                <p>登録はスマホ1台で進めます。1つのGoogleアカウントで1店舗を登録できます。</p>
+                <ol class="registration-steps">
+                  <li><strong>Googleをつないで、お店を選ぶ</strong><p>「初めての方：Googleでお店を接続」を押し、ご本人のGoogleアカウントでログインして接続を許可します。管理しているお店の「この店舗を使う」を押してください。</p></li>
+                  <li><strong>LINEを返信案の届け先にする</strong><p>「LINEを開いてコードを送る」を押します。初回は友だち追加後、登録画面に戻って同じボタンをもう一度押してください。コードが入ったら、LINEの送信矢印を1回押します。届いたカードの「確認して登録画面へ進む」で登録画面に戻り、「通知先を確認して次へ」を押します。</p></li>
+                  <li><strong>条件を確認して、利用を開始する</strong><p>利用条件を読んでチェックを入れ、「利用を開始する」を押します。</p></li>
+                </ol>
+                <p>オーナーや本部が管理しているお店は、その方にご相談ください。管理権限がない場合は、Googleビジネスプロフィールの管理者として招待してもらい、承諾してから登録します。パスワードや認証コードを運営者に送る必要はありません。</p>
+              </div>
+            </details>
+          </section>
+
+          <section class="compact-section pricing-section" id="pricing" aria-labelledby="pricing-title">
+            <div>
+              <h2 id="pricing-title">まずは無料で、お試しを。</h2>
+              <p class="section-intro">先着10店舗・1店舗あたり月30件まで。</p>
+              <p class="muted-copy">試験運用中のサービスです。<br />同意なく、有料プランに切り替わることはありません。</p>
+              <details class="pricing-details">
+                <summary>料金・試用条件の詳細</summary>
+                <div class="disclosure-content">
+                  <p>無料・先着10店舗までの試験運用です。定員に達したら受付を一時停止します。AIの下書きは1店舗あたり月30件まで。対象は直近60日以内で、まだ返信していない口コミです。</p>
+                  <p>返信案ができた日だけ、原則1日1回・朝9時以降に、最大5件ずつLINEに届きます。返信案は登録直後には届きません。店舗数などにより遅れる日があります。</p>
                 </div>
-                <p class="bubble-me">送信</p>
-                <p class="bubble-bot">Googleへの投稿を確認しました。</p>
-              </div>
+              </details>
             </div>
-            <figcaption>画面はイメージです。店舗・口コミは架空の例です。</figcaption>
-          </figure>
-        </div>
-      </section>
+            <a class="button" href="/start">無料ではじめる</a>
+          </section>
 
-      <section class="section" id="features" aria-labelledby="features-title">
-        <div class="wrap">
-          <p class="section-kicker">できること</p>
-          <h2 id="features-title"><span class="nw">返信の「考える・書く・載せる」を、</span><span class="nw">LINEの中で。</span></h2>
-          <div class="features">
-            <article class="feature">
-              <div class="icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg>
-              </div>
-              <h3>新しい口コミを自動で見つける</h3>
-              <p>Googleの公式の仕組みでお店の口コミを定期的に確認します。管理画面を見に行く必要はありません。</p>
-            </article>
-            <article class="feature">
-              <div class="icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm3 6.5h10v-2H7v2Zm0 4h7v-2H7v2Z"/></svg>
-              </div>
-              <h3>AIが下書きして、LINEに届く</h3>
-              <p>口コミの内容に合わせて返信の下書きを作り、いつものLINEにお知らせします。英語や韓国語の口コミには同じ言葉で返します。</p>
-            </article>
-            <article class="feature">
-              <div class="icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="m3 17.25 11.06-11.06 3.75 3.75L6.75 21H3v-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83Z"/></svg>
-              </div>
-              <h3>確認して「送信」。直すのも簡単</h3>
-              <p>そのままでよければ「送信」。少し直したいときは「編集する」を押して、直した文章をLINEで送るだけです。</p>
-            </article>
-          </div>
-        </div>
-      </section>
-
-      <section class="section section-tint" id="steps" aria-labelledby="steps-title">
-        <div class="wrap">
-          <p class="section-kicker">はじめ方</p>
-          <h2 id="steps-title">GoogleとLINEをつなぐ、3つのステップ。</h2>
-          <p class="section-lead">用意するのは、お店のGoogleビジネスプロフィールを管理しているGoogleアカウントとLINEだけ。</p>
-          <ol class="steps">
-            <li>
-              <span class="num" aria-hidden="true">1</span>
-              <div>
-                <h3>Googleで接続して、お店を選ぶ</h3>
-                <p>「Googleで接続」を押して許可すると、管理しているお店が一覧で出てきます。</p>
-              </div>
-            </li>
-            <li>
-              <span class="num" aria-hidden="true">2</span>
-              <div>
-                <h3>LINEで本人確認</h3>
-                <p>公式アカウントを友だち追加して、画面に出るコードを送り、届いた6桁の番号を入れます。</p>
-              </div>
-            </li>
-            <li>
-              <span class="num" aria-hidden="true">3</span>
-              <div>
-                <h3>利用を開始する</h3>
-                <p>接続が完了すると、新しい口コミへの下書きを原則1日1回、LINEにまとめて届けます。</p>
-              </div>
-            </li>
-          </ol>
-          <div class="center"><a class="btn btn-primary" href="/start">無料ではじめる<small>GoogleとLINEを接続</small></a></div>
-        </div>
-      </section>
-
-      <section class="section" aria-labelledby="safe-title">
-        <div class="wrap">
-          <p class="section-kicker">安心して使えるように</p>
-          <h2 id="safe-title">勝手に返信されることはありません。</h2>
-          <div class="safe">
-            <div class="safe-item">
-              <h3>送信するまで公開されない</h3>
-              <p>口コミ1件ごとに、あなたが「送信」を押したものだけがGoogleに載ります。返信しないときは、何も押さなければ大丈夫です。</p>
+          <section class="compact-section faq-section" id="faq" aria-labelledby="faq-title">
+            <h2 id="faq-title">気になること</h2>
+            <div class="faq-list">
+              <details>
+                <summary>勝手に返信されませんか？</summary>
+                <div class="disclosure-content"><p>口コミ1件ごとに、あなたが「送信」を押した返信だけがGoogleに公開されます。送らないときは、何も押さなくて大丈夫です。</p><p>返信案は7日で消えます。何も押さなければ投稿されません。</p></div>
+              </details>
+              <details>
+                <summary>下書きを直してから送れますか？</summary>
+                <div class="disclosure-content"><p>「編集する」から書き換えられます。直した文章をLINEで送ります。直した内容の確認カードが届くので、よければ「送信」を押します。</p></div>
+              </details>
+              <details>
+                <summary>通知はいつ届きますか？</summary>
+                <div class="disclosure-content"><p>返信案がある日だけ、原則1日1回・朝9時以降に、最大5件ずつLINEに届きます。登録直後には届かず、店舗数などにより遅れる日があります。</p><p>返信案は、登録の途中でコードを送ったLINEに届きます。お店の管理権限があるGoogleアカウントと、そのLINEで登録してください。</p><p>AIの下書きは1店舗あたり月30件までです。対象となる口コミなど、最新の条件は<a href="/self/help/faq">よくある質問</a>をご確認ください。</p></div>
+              </details>
+              <details>
+                <summary>いつでも利用をやめられますか？</summary>
+                <div class="disclosure-content"><p><a href="/account">アカウント画面</a>の「利用を停止」で、新たな処理を止められます。「接続を切断」で、保存した接続情報や口コミの本文を削除します。</p></div>
+              </details>
+              <details>
+                <summary>データやAIの下書きについて</summary>
+                <div class="disclosure-content"><p>個人店向けに、個人で開発している試験運用中のサービスです。AIは誤った下書きを作ることがあります。公開前に、内容をご確認ください。検索順位や集客効果の保証はありません。</p><p>下書きの作成に、口コミ本文と投稿者名を外部のAIサービス（Groq）へ送ります。口コミの本文は7日を目安に削除します。広告のために売ったり、AIの学習に使ったりはしません。詳しくは<a href="/self/privacy">データの取り扱い</a>をご確認ください。</p></div>
+              </details>
             </div>
-            <div class="safe-item">
-              <h3>いつでも停止・削除</h3>
-              <p>アカウント画面の「利用を停止」で、新たな処理を止められます。「接続を切断」で、保存していた接続情報や口コミの本文を削除します。</p>
+            <div class="help-links">
+              <a class="text-link" href="/self/help/faq">すべてのよくある質問</a>
+              <a class="text-link" href="/self/help/report">接続・使い方を相談する</a>
             </div>
-            <div class="safe-item">
-              <h3>自動で料金はかかりません</h3>
-              <p>有料プランへ勝手に切り替わることはありません。有料にする場合は事前にお知らせし、同意なしに切り替えません。</p>
-            </div>
-            <div class="safe-item">
-              <h3>口コミの本文は7日で削除</h3>
-              <p>返信の下書きを作るためだけに使い、広告に使ったり売ったりはしません。<a href="/self/privacy">データの取り扱い</a></p>
-            </div>
-          </div>
+          </section>
         </div>
-      </section>
+      </main>
 
-      <section class="section section-tint" id="pricing" aria-labelledby="terms-title">
-        <div class="wrap narrow">
-          <p class="section-kicker">料金・試用の条件</p>
-          <h2 id="terms-title">いまは無料で、先着10店舗まで。</h2>
-          <dl class="conditions">
-            <div><dt>料金</dt><dd>無料</dd></div>
-            <div><dt>受付</dt><dd>先着10店舗（埋まったら一時停止します）</dd></div>
-            <div><dt>AIの下書き</dt><dd>1店舗あたり月30件まで</dd></div>
-            <div><dt>通知</dt><dd>だいたい1日1回・朝9時以降にまとめて届きます</dd></div>
-          </dl>
-          <p class="note">個人で運営しているサービスです。検索順位や集客の効果は保証できません。AIの下書きは間違えることがあるので、送る前に一度読んでください。</p>
+      <footer class="site-footer">
+        <div class="page-width footer-inner">
+          <a class="brand footer-brand" href="#main-content"><strong>MEO</strong> Harness</a>
+          <nav aria-label="フッターナビゲーション">
+            <a href="/self/terms">利用条件</a>
+            <a href="/self/privacy">プライバシー</a>
+            <a href="/account">アカウント</a>
+          </nav>
+          <p class="footer-note">運営者：Yoshiki Apps（個人開発）<br />Google・LINEの公式サービスではありません。Google は Google LLC の商標です。</p>
+          <p class="footer-contact"><a href="mailto:meo.harness@gmail.com">meo.harness@gmail.com</a></p>
         </div>
-      </section>
-
-      <section class="section" id="faq" aria-labelledby="faq-title">
-        <div class="wrap narrow">
-          <p class="section-kicker">はじめる前に</p>
-          <h2 id="faq-title">よくある質問</h2>
-          <div class="faq-list">
-            <details>
-              <summary>はじめる前に何が必要ですか？</summary>
-              <p>お店のGoogleビジネスプロフィールを管理しているGoogleアカウントとLINEが必要です。ご自身でログインし、接続を許可します。パスワードや認証コードを運営者に送る必要はありません。</p>
-            </details>
-            <details>
-              <summary>返信は自動で公開されますか？</summary>
-              <p>いいえ。口コミ1件ごとに、内容を確認して「送信」を押した返信だけがGoogleに公開されます。「編集する」で書き換えたり、送信せずに残したりできます。</p>
-            </details>
-            <details>
-              <summary>通知はすぐに届きますか？</summary>
-              <p>即時通知ではありません。原則1日1回・朝9時以降にまとめて届けます。新しい口コミや送れる下書きがない日は、通知されません。</p>
-            </details>
-          </div>
-          <div class="help-links">
-            <a href="/self/help/faq">すべてのよくある質問</a>
-            <a href="/self/help/report">接続・使い方を相談する</a>
-            <p>報告フォームで内容を整理し、メールで相談できます。</p>
-          </div>
-        </div>
-      </section>
-
-      <section class="section section-tint" id="operator" aria-labelledby="operator-title">
-        <div class="wrap narrow">
-          <p class="section-kicker">運営者</p>
-          <h2 id="operator-title">運営者情報</h2>
-          <dl class="conditions">
-            <div><dt>サービス名</dt><dd>MEO Harness（エムイーオー ハーネス）</dd></div>
-            <div><dt>運営</dt><dd>Yoshiki Apps（個人開発）</dd></div>
-            <div><dt>問い合わせ</dt><dd><a href="mailto:meo.harness@gmail.com">meo.harness@gmail.com</a>（<a href="/self/help/faq">よくある質問</a>もご覧ください）</dd></div>
-            <div><dt>自分で設置する版</dt><dd>プログラムを公開しています。<a href="https://github.com/yosinn1-blip/meo-harness/blob/main/docs/self-hosting.md" rel="noopener">設置の手順（GitHub）</a></dd></div>
-          </dl>
-        </div>
-      </section>
-
-      <section class="cta">
-        <div class="wrap">
-          <h2>口コミへの返信を、今日から「送信」だけに。</h2>
-          <p>お店を管理するGoogleアカウントとLINEをご用意ください。</p>
-          <a class="btn btn-primary btn-large" href="/start">無料ではじめる</a>
-        </div>
-      </section>
-    </main>
-
-    <footer class="foot">
-      <div class="wrap foot-inner">
-        <span>© Yoshiki Apps</span>
-        <nav aria-label="フッター">
-          <a href="/self/terms">利用条件</a>
-          <a href="/self/privacy">プライバシー</a>
-          <a href="/self/help/faq">よくある質問</a>
-          <a href="/account">アカウント</a>
-        </nav>
-      </div>
-    </footer>
+      </footer>
   </body>
 </html>
